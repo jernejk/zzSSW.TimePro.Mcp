@@ -416,3 +416,18 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# Infisical
+.infisical.json
+
+# macOS
+.DS_Store
+
+# JetBrains Rider
+.idea/
+
+# Agent
+.agent/
+
+# Dry-run confirmations
+dry-run/

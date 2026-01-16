@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SSW.TimePro.Mcp.Server/SSW.TimePro.Mcp.Server.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SSW.TimePro.Mcp.Tests/SSW.TimePro.Mcp.Tests.csproj" />
+  </Folder>
+</Solution>

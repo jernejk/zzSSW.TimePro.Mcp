@@ -1,0 +1,15 @@
+{
+    "mcpServers": {
+        "ssw-timepro": {
+            "command": "dotnet",
+            "args": [
+                "run",
+                "--project",
+                "/Users/jk/Developer/git/SSW.TimePro.Mcp/src/SSW.TimePro.Mcp.Server/SSW.TimePro.Mcp.Server.csproj"
+            ],
+            "env": {
+                "DOTNET_ENVIRONMENT": "Development"
+            }
+        }
+    }
+}
