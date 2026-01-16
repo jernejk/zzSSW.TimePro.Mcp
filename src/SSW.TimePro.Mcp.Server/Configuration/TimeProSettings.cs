@@ -15,8 +15,9 @@ public class TimeProSettings
     /// <summary>
     /// Base URL for the TimePro API.
     /// Defaults to LOCAL environment for safety - production writes are blocked.
+    /// SSL certificate validation is bypassed for local-* hostnames.
     /// Supported formats:
-    /// - https://api.local-sswtimepro.com:7107/ (local - full access)
+    /// - https://api.local-sswtimepro.com:7107/ (local HTTPS - full access)
     /// - https://api.staging-sswtimepro.com/ (staging - full access)
     /// - https://api.sswtimepro.com/ (production - READ ONLY)
     /// </summary>

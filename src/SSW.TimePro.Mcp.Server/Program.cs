@@ -31,8 +31,19 @@ builder.Services.Configure<TimeProSettings>(
 builder.Services.Configure<GitHubSettings>(
     builder.Configuration.GetSection(GitHubSettings.SectionName));
 
-// Register HTTP clients
-builder.Services.AddHttpClient<ITimeProService, TimeProService>();
+// Register HTTP clients with SSL bypass for local development
+builder.Services.AddHttpClient<ITimeProService, TimeProService>()
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+    {
+        ServerCertificateCustomValidationCallback = (message, cert, chain, errors) =>
+        {
+            // Trust local development certificates
+            if (message.RequestUri?.Host.Contains("local-") == true)
+                return true;
+            // Use default validation for all other hosts
+            return errors == System.Net.Security.SslPolicyErrors.None;
+        }
+    });
 builder.Services.AddHttpClient<IGitHubService, GitHubService>();
 
 // Register confirmation service (file-based persistence)

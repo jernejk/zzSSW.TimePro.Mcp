@@ -87,6 +87,14 @@ public interface ITimeProService
         string employeeId,
         string searchText,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Get projects for a client.
+    /// </summary>
+    Task<List<ProjectForSelect>> GetProjectsForClientAsync(
+        string employeeId,
+        string clientId,
+        CancellationToken cancellationToken = default);
     
     /// <summary>
     /// Create a new timesheet.
@@ -312,12 +320,26 @@ public class TimeProService : ITimeProService
         CancellationToken cancellationToken = default)
     {
         var url = $"{TimesheetApiPath}/GetClientListForAddTimesheet?empID={employeeId}&searchText={Uri.EscapeDataString(searchText)}";
-        
+
         var response = await _httpClient.GetAsync(url, cancellationToken);
         response.EnsureSuccessStatusCode();
-        
+
         var clients = await response.Content.ReadFromJsonAsync<List<ClientSearchResult>>(_jsonOptions, cancellationToken);
         return clients ?? [];
+    }
+
+    public async Task<List<ProjectForSelect>> GetProjectsForClientAsync(
+        string employeeId,
+        string clientId,
+        CancellationToken cancellationToken = default)
+    {
+        var url = $"{TimesheetApiPath}/GetProjectsForClient?empID={employeeId}&clientID={Uri.EscapeDataString(clientId)}";
+
+        var response = await _httpClient.GetAsync(url, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        var projects = await response.Content.ReadFromJsonAsync<List<ProjectForSelect>>(_jsonOptions, cancellationToken);
+        return projects ?? [];
     }
     
     public async Task<TimesheetResponse> CreateTimesheetAsync(

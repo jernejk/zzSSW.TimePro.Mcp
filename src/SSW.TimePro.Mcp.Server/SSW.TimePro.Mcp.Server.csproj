@@ -6,6 +6,20 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <UserSecretsId>ssw-timepro-mcp-server</UserSecretsId>
+
+    <!-- dotnet tool packaging -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>ssw-timepro-mcp</ToolCommandName>
+    <PackageId>SSW.TimePro.Mcp</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>SSW</Authors>
+    <Company>SSW</Company>
+    <Description>MCP (Model Context Protocol) server for SSW TimePro timesheet management. Enables AI assistants to help manage timesheets with dry-run confirmation support.</Description>
+    <PackageTags>mcp;timepro;timesheet;ai;assistant</PackageTags>
+    <PackageProjectUrl>https://github.com/jernejk/SSW.TimePro.Mcp</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/jernejk/SSW.TimePro.Mcp</RepositoryUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
   <ItemGroup>
@@ -22,6 +36,10 @@
     <Content Include="appsettings.*.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
   </ItemGroup>
 
 </Project>

@@ -110,12 +110,52 @@ public class TimesheetManagementTools
         {
             var clients = await _timeProService.SearchClientsAsync(
                 employeeId, searchText, cancellationToken);
-            
+
             return JsonSerializer.Serialize(new
             {
                 success = true,
                 count = clients.Count,
                 clients
+            }, _jsonOptions);
+        }
+        catch (Exception ex)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                success = false,
+                error = ex.Message
+            }, _jsonOptions);
+        }
+    }
+
+    /// <summary>
+    /// Get projects for a client.
+    /// </summary>
+    [McpServerTool]
+    [Description("Get available projects for a specific client. Use SearchClients first to get the client ID.")]
+    public async Task<string> GetProjectsForClient(
+        [Description("The employee ID (e.g., 'JEK')")] string employeeId,
+        [Description("The client ID (from SearchClients)")] string clientId,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var projects = await _timeProService.GetProjectsForClientAsync(
+                employeeId, clientId, cancellationToken);
+
+            return JsonSerializer.Serialize(new
+            {
+                success = true,
+                count = projects.Count,
+                clientId,
+                projects = projects.Select(p => new
+                {
+                    projectId = p.Value,
+                    name = p.DisplayText,
+                    useIteration = p.UseIteration,
+                    isGeneral = p.IsGeneral,
+                    isLeave = p.IsLeave
+                })
             }, _jsonOptions);
         }
         catch (Exception ex)
@@ -144,7 +184,8 @@ public class TimesheetManagementTools
         [Description("Location ID")] string locationId,
         [Description("Notes/description (optional)")] string? notes = null,
         [Description("Time less in hours (optional, default: 0)")] decimal timeLess = 0,
-        [Description("Billable ID (optional, default: 'BILLABLE')")] string billableId = "BILLABLE",
+        [Description("Billable ID (optional, default: 'BILLABLE'). Use 'W' for internal work.")] string billableId = "BILLABLE",
+        [Description("Sell price per hour (optional). Required for billable work, use 0 for internal.")] decimal? sellPrice = null,
         [Description("Iteration ID (optional)")] int? iterationId = null,
         [Description("Dry run - create confirmation without saving (default: true)")] bool dryRun = true,
         CancellationToken cancellationToken = default)
@@ -154,7 +195,7 @@ public class TimesheetManagementTools
             var dateTime = DateTime.Parse(date);
             var startDateTime = DateTime.Parse($"{date} {startTime}");
             var endDateTime = DateTime.Parse($"{date} {endTime}");
-            
+
             var request = new TimesheetRequest
             {
                 EmpId = employeeId,
@@ -168,6 +209,7 @@ public class TimesheetManagementTools
                 Note = notes,
                 TimeLess = timeLess,
                 BillableId = billableId,
+                SellPrice = sellPrice,
                 IterationId = iterationId
             };
             
