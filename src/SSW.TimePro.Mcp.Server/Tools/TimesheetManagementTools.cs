@@ -54,49 +54,6 @@ public class TimesheetManagementTools
     }
 
     /// <summary>
-    /// Get reference data for creating timesheets.
-    /// </summary>
-    [McpServerTool]
-    [Description("Get reference data needed to create a timesheet (categories, locations, billable types). Call this before creating a timesheet.")]
-    public async Task<string> GetTimesheetReferenceData(
-        [Description("The employee ID (e.g., 'JEK')")] string employeeId,
-        [Description("Date for the timesheet (yyyy-MM-dd). Defaults to today.")] string? date = null,
-        CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            var targetDate = string.IsNullOrEmpty(date)
-                ? DateOnly.FromDateTime(DateTime.Today)
-                : DateOnly.Parse(date);
-            
-            var categoriesTask = _timeProService.GetTimesheetCategoriesAsync(cancellationToken);
-            var locationsTask = _timeProService.GetTimesheetLocationsAsync(cancellationToken);
-            var billableTypesTask = _timeProService.GetTimesheetBillableTypesAsync(cancellationToken);
-            var viewDataTask = _timeProService.GetAddTimesheetViewAsync(employeeId, targetDate, cancellationToken);
-            
-            await Task.WhenAll(categoriesTask, locationsTask, billableTypesTask, viewDataTask);
-            
-            return JsonSerializer.Serialize(new
-            {
-                success = true,
-                date = targetDate.ToString("yyyy-MM-dd"),
-                defaults = await viewDataTask,
-                categories = await categoriesTask,
-                locations = await locationsTask,
-                billableTypes = await billableTypesTask
-            }, _jsonOptions);
-        }
-        catch (Exception ex)
-        {
-            return JsonSerializer.Serialize(new
-            {
-                success = false,
-                error = ex.Message
-            }, _jsonOptions);
-        }
-    }
-
-    /// <summary>
     /// Search for clients.
     /// </summary>
     [McpServerTool]
@@ -331,6 +288,7 @@ public class TimesheetManagementTools
         [Description("Notes/description (optional)")] string? notes = null,
         [Description("Time less in hours (optional, default: 0)")] decimal timeLess = 0,
         [Description("Billable ID (optional, default: 'BILLABLE')")] string billableId = "BILLABLE",
+        [Description("Sell price per hour (optional). Required for billable work, use 0 for internal.")] decimal? sellPrice = null,
         [Description("Iteration ID (optional)")] int? iterationId = null,
         [Description("Dry run - validate without saving (default: false)")] bool dryRun = false,
         CancellationToken cancellationToken = default)
@@ -355,8 +313,10 @@ public class TimesheetManagementTools
                 Note = notes,
                 TimeLess = timeLess,
                 BillableId = billableId,
+                SellPrice = sellPrice,
                 IterationId = iterationId
             };
+
 
             // Block direct writes to production (unless dry run)
             if (!dryRun)
@@ -374,44 +334,6 @@ public class TimesheetManagementTools
                 timesheetId = response.TimesheetId,
                 dryRun,
                 request
-            }, _jsonOptions);
-        }
-        catch (Exception ex)
-        {
-            return JsonSerializer.Serialize(new
-            {
-                success = false,
-                error = ex.Message
-            }, _jsonOptions);
-        }
-    }
-
-    /// <summary>
-    /// Accept a suggested timesheet.
-    /// </summary>
-    [McpServerTool]
-    [Description("Accept a suggested timesheet, converting it to a regular timesheet entry. Production is READ-ONLY.")]
-    public async Task<string> AcceptSuggestedTimesheet(
-        [Description("The suggested timesheet ID to accept")] int suggestedTimesheetId,
-        [Description("New sell price (optional, to override the suggested rate)")] decimal? newSellPrice = null,
-        [Description("Notes/description for the timesheet (optional, overrides suggested notes)")] string? notes = null,
-        [Description("Location ID (optional, e.g., 'Home', 'SSW')")] string? location = null,
-        CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            // Block writes to production
-            var blocked = CheckWritePermission();
-            if (blocked != null) return blocked;
-
-            var response = await _timeProService.AcceptSuggestedTimesheetAsync(
-                suggestedTimesheetId, newSellPrice, notes, location, cancellationToken);
-            
-            return JsonSerializer.Serialize(new
-            {
-                success = response.Success,
-                message = response.Message,
-                suggestedTimesheetId
             }, _jsonOptions);
         }
         catch (Exception ex)
@@ -474,46 +396,6 @@ public class TimesheetManagementTools
                 message = response.Message,
                 timesheetId,
                 dryRun = false
-            }, _jsonOptions);
-        }
-        catch (Exception ex)
-        {
-            return JsonSerializer.Serialize(new
-            {
-                success = false,
-                error = ex.Message
-            }, _jsonOptions);
-        }
-    }
-
-    /// <summary>
-    /// Delete a suggested timesheet.
-    /// </summary>
-    [McpServerTool]
-    [Description("Delete/reject a suggested timesheet. Use dry run to preview what would be deleted. Production is READ-ONLY.")]
-    public async Task<string> DeleteSuggestedTimesheet(
-        [Description("The suggested timesheet ID to delete")] int suggestedTimesheetId,
-        [Description("Dry run - preview without actually deleting (default: false)")] bool dryRun = false,
-        CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            // Block direct writes to production (unless dry run)
-            if (!dryRun)
-            {
-                var blocked = CheckWritePermission();
-                if (blocked != null) return blocked;
-            }
-
-            var response = await _timeProService.DeleteSuggestedTimesheetAsync(
-                suggestedTimesheetId, dryRun, cancellationToken);
-            
-            return JsonSerializer.Serialize(new
-            {
-                success = response.Success,
-                message = response.Message,
-                suggestedTimesheetId,
-                dryRun
             }, _jsonOptions);
         }
         catch (Exception ex)

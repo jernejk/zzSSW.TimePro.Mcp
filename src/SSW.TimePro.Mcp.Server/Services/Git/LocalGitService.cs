@@ -58,15 +58,22 @@ public partial class LocalGitService : ILocalGitService
         {
             throw new InvalidOperationException($"'{repositoryPath}' is not a git repository.");
         }
-        
+
         var repoName = await GetRepositoryNameAsync(repositoryPath, cancellationToken);
         var branch = await GetCurrentBranchAsync(repositoryPath, cancellationToken);
-        
-        var args = $"log --all --format=\"{GitLogFormat}\" --since=\"{startDate:yyyy-MM-dd}\" --until=\"{endDate.AddDays(1):yyyy-MM-dd}\"";
-        
-        if (!string.IsNullOrEmpty(author))
+
+        // Default to current git user if no author specified
+        var effectiveAuthor = author;
+        if (string.IsNullOrEmpty(effectiveAuthor))
         {
-            args += $" --author=\"{author}\"";
+            effectiveAuthor = await GetCurrentUserEmailAsync(repositoryPath, cancellationToken);
+        }
+
+        var args = $"log --all --format=\"{GitLogFormat}\" --since=\"{startDate:yyyy-MM-dd}\" --until=\"{endDate.AddDays(1):yyyy-MM-dd}\"";
+
+        if (!string.IsNullOrEmpty(effectiveAuthor))
+        {
+            args += $" --author=\"{effectiveAuthor}\"";
         }
         
         var output = await RunGitCommandAsync(repositoryPath, args, cancellationToken);
@@ -130,6 +137,19 @@ public partial class LocalGitService : ILocalGitService
         catch
         {
             return false;
+        }
+    }
+
+    private async Task<string?> GetCurrentUserEmailAsync(string repositoryPath, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var output = await RunGitCommandAsync(repositoryPath, "config user.email", cancellationToken);
+            return output.Trim();
+        }
+        catch
+        {
+            return null;
         }
     }
     

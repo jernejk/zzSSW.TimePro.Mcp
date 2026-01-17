@@ -66,52 +66,43 @@ public class GitHubService : IGitHubService
         CancellationToken cancellationToken = default)
     {
         var commits = new List<GitCommit>();
+
+        // Use Search Commits API for full history (not limited to 300 events)
+        // Format: author:username author-date:YYYY-MM-DD..YYYY-MM-DD
+        var query = $"author:{username} author-date:{startDate:yyyy-MM-dd}..{endDate:yyyy-MM-dd}";
         var page = 1;
         const int perPage = 100;
-        
-        while (page <= 3) // GitHub only returns last 300 events max
+
+        while (page <= 10) // Search API allows up to 1000 results (10 pages x 100)
         {
-            var url = $"/users/{username}/events?per_page={perPage}&page={page}";
-            
+            var url = $"/search/commits?q={Uri.EscapeDataString(query)}&per_page={perPage}&page={page}&sort=author-date&order=desc";
+
             try
             {
-                var events = await _httpClient.GetFromJsonAsync<List<GitHubEvent>>(
+                var response = await _httpClient.GetFromJsonAsync<GitHubSearchResponse>(
                     url, cancellationToken);
-                
-                if (events == null || events.Count == 0)
+
+                if (response?.Items == null || response.Items.Count == 0)
                     break;
-                
-                foreach (var evt in events)
+
+                foreach (var item in response.Items)
                 {
-                    if (evt.Type != "PushEvent" || evt.Payload?.Commits == null)
-                        continue;
-                    
-                    var eventDate = DateOnly.FromDateTime(evt.CreatedAt);
-                    
-                    // Skip if outside date range
-                    if (eventDate < startDate || eventDate > endDate)
-                        continue;
-                    
-                    foreach (var commit in evt.Payload.Commits)
+                    commits.Add(new GitCommit
                     {
-                        commits.Add(new GitCommit
-                        {
-                            Hash = commit.Sha,
-                            Author = commit.Author?.Name ?? username,
-                            Email = commit.Author?.Email ?? "",
-                            Date = evt.CreatedAt,
-                            Message = commit.Message,
-                            Repository = evt.Repo?.Name ?? "unknown",
-                            Source = GitSource.GitHub
-                        });
-                    }
+                        Hash = item.Sha,
+                        Author = item.Commit?.Author?.Name ?? username,
+                        Email = item.Commit?.Author?.Email ?? "",
+                        Date = item.Commit?.Author?.Date ?? DateTime.MinValue,
+                        Message = item.Commit?.Message ?? "",
+                        Repository = item.Repository?.FullName ?? "unknown",
+                        Source = GitSource.GitHub
+                    });
                 }
-                
-                // Check if we've gone past the start date
-                var oldestEvent = events.MinBy(e => e.CreatedAt);
-                if (oldestEvent != null && DateOnly.FromDateTime(oldestEvent.CreatedAt) < startDate)
+
+                // Check if we've fetched all results
+                if (response.Items.Count < perPage || commits.Count >= response.TotalCount)
                     break;
-                
+
                 page++;
             }
             catch (HttpRequestException)
@@ -119,7 +110,7 @@ public class GitHubService : IGitHubService
                 break;
             }
         }
-        
+
         return commits
             .DistinctBy(c => c.Hash)
             .Where(c => DateOnly.FromDateTime(c.Date) >= startDate && DateOnly.FromDateTime(c.Date) <= endDate)
@@ -187,7 +178,59 @@ file class GitHubAuthor
 {
     [JsonPropertyName("name")]
     public string Name { get; set; } = string.Empty;
-    
+
     [JsonPropertyName("email")]
     public string Email { get; set; } = string.Empty;
+}
+
+// Search Commits API models
+file class GitHubSearchResponse
+{
+    [JsonPropertyName("total_count")]
+    public int TotalCount { get; set; }
+
+    [JsonPropertyName("incomplete_results")]
+    public bool IncompleteResults { get; set; }
+
+    [JsonPropertyName("items")]
+    public List<GitHubSearchCommitItem> Items { get; set; } = [];
+}
+
+file class GitHubSearchCommitItem
+{
+    [JsonPropertyName("sha")]
+    public string Sha { get; set; } = string.Empty;
+
+    [JsonPropertyName("commit")]
+    public GitHubCommitDetail? Commit { get; set; }
+
+    [JsonPropertyName("repository")]
+    public GitHubSearchRepository? Repository { get; set; }
+}
+
+file class GitHubCommitDetail
+{
+    [JsonPropertyName("message")]
+    public string Message { get; set; } = string.Empty;
+
+    [JsonPropertyName("author")]
+    public GitHubCommitAuthor? Author { get; set; }
+}
+
+file class GitHubCommitAuthor
+{
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("email")]
+    public string Email { get; set; } = string.Empty;
+
+    [JsonPropertyName("date")]
+    public DateTime Date { get; set; }
+}
+
+file class GitHubSearchRepository
+{
+    [JsonPropertyName("full_name")]
+    public string FullName { get; set; } = string.Empty;
 }

@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Options;
 using ModelContextProtocol.Server;
 using SSW.TimePro.Mcp.Server.Configuration;
+using SSW.TimePro.Mcp.Server.Services;
 using SSW.TimePro.Mcp.Server.Services.Git;
 
 namespace SSW.TimePro.Mcp.Server.Tools;
@@ -16,6 +17,7 @@ public class GitScanTools
     private readonly IGitScanningService _gitScanningService;
     private readonly ILocalGitService _localGitService;
     private readonly IGitHubService _gitHubService;
+    private readonly ITimeProService _timeProService;
     private readonly GitHubSettings _gitHubSettings;
     private static readonly JsonSerializerOptions _jsonOptions = new()
     {
@@ -27,94 +29,25 @@ public class GitScanTools
         IGitScanningService gitScanningService,
         ILocalGitService localGitService,
         IGitHubService gitHubService,
+        ITimeProService timeProService,
         IOptions<GitHubSettings> gitHubSettings)
     {
         _gitScanningService = gitScanningService;
         _localGitService = localGitService;
         _gitHubService = gitHubService;
+        _timeProService = timeProService;
         _gitHubSettings = gitHubSettings.Value;
-    }
-
-    /// <summary>
-    /// Scan a local git repository for commits.
-    /// </summary>
-    [McpServerTool]
-    [Description("Scan a local git repository for commits. Useful for finding work activity that hasn't been pushed yet.")]
-    public async Task<string> ScanLocalRepository(
-        [Description("Path to the git repository")] string repositoryPath,
-        [Description("Number of days to scan (default: 7)")] int days = 7,
-        [Description("Author name/email to filter (optional)")] string? author = null,
-        CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            if (!_localGitService.IsGitRepository(repositoryPath))
-            {
-                return JsonSerializer.Serialize(new
-                {
-                    success = false,
-                    error = $"'{repositoryPath}' is not a git repository."
-                }, _jsonOptions);
-            }
-            
-            var endDate = DateOnly.FromDateTime(DateTime.Today);
-            var startDate = endDate.AddDays(-days + 1);
-            
-            var commits = await _localGitService.ScanRepositoryAsync(
-                repositoryPath,
-                startDate,
-                endDate,
-                author,
-                cancellationToken);
-            
-            var repoName = await _localGitService.GetRepositoryNameAsync(repositoryPath, cancellationToken);
-            var hasUncommitted = await _localGitService.HasUncommittedChangesAsync(repositoryPath, cancellationToken);
-            var currentBranch = await _localGitService.GetCurrentBranchAsync(repositoryPath, cancellationToken);
-            
-            var dailyActivity = _gitScanningService.GroupByDay(commits);
-            
-            return JsonSerializer.Serialize(new
-            {
-                success = true,
-                repository = repoName,
-                path = repositoryPath,
-                currentBranch,
-                hasUncommittedChanges = hasUncommitted,
-                startDate = startDate.ToString("yyyy-MM-dd"),
-                endDate = endDate.ToString("yyyy-MM-dd"),
-                totalCommits = commits.Count,
-                dailyActivity = dailyActivity.Select(d => new
-                {
-                    date = d.Date.ToString("yyyy-MM-dd"),
-                    d.TotalCommits,
-                    commits = d.Commits.Select(c => new
-                    {
-                        c.ShortHash,
-                        time = c.Date.ToString("HH:mm"),
-                        c.Subject
-                    })
-                })
-            }, _jsonOptions);
-        }
-        catch (Exception ex)
-        {
-            return JsonSerializer.Serialize(new
-            {
-                success = false,
-                error = ex.Message
-            }, _jsonOptions);
-        }
     }
 
     /// <summary>
     /// Scan multiple local repositories.
     /// </summary>
     [McpServerTool]
-    [Description("Scan multiple local git repositories for commits. Provide a list of paths.")]
+    [Description("Scan multiple local git repositories for the current user's commits. Automatically filters by git user.email.")]
     public async Task<string> ScanLocalRepositories(
         [Description("Comma-separated list of repository paths")] string repositoryPaths,
         [Description("Number of days to scan (default: 7)")] int days = 7,
-        [Description("Author name/email to filter (optional)")] string? author = null,
+        [Description("Author name/email to filter (optional, defaults to git user.email)")] string? author = null,
         CancellationToken cancellationToken = default)
     {
         try
@@ -168,29 +101,100 @@ public class GitScanTools
     }
 
     /// <summary>
-    /// Scan GitHub for user activity.
+    /// Scan remote source for user commits (GitHub or Azure DevOps via TimePro).
     /// </summary>
     [McpServerTool]
-    [Description("Scan GitHub for a user's commit activity. Uses GitHub API to fetch recent push events.")]
-    public async Task<string> ScanGitHub(
-        [Description("GitHub username")] string username,
+    [Description("Scan remote source for user commits. Supports 'github' (default) or 'azuredevops' (via TimePro API). For Azure DevOps, use employeeId instead of username.")]
+    public async Task<string> ScanRemoteCommits(
+        [Description("Username/employeeId for the remote source (GitHub username or TimePro employee ID for Azure DevOps)")] string username,
         [Description("Number of days to scan (default: 7)")] int days = 7,
+        [Description("Source: 'github' (default) or 'azuredevops'")] string source = "github",
         CancellationToken cancellationToken = default)
     {
         try
         {
             var endDate = DateOnly.FromDateTime(DateTime.Today);
             var startDate = endDate.AddDays(-days + 1);
-            
+
+            if (source.Equals("azuredevops", StringComparison.OrdinalIgnoreCase))
+            {
+                // Azure DevOps via TimePro API
+                var azureResults = await _timeProService.GetAzureDevOpsCommitsAsync(
+                    username, // employeeId
+                    startDate,
+                    endDate,
+                    cancellationToken);
+
+                // Flatten all commits from all subscriptions and group by day
+                var allCommits = azureResults
+                    .SelectMany(r => r.Data.Select(c => new
+                    {
+                        Subscription = r.Subscription?.Name ?? "Unknown",
+                        Commit = c
+                    }))
+                    .ToList();
+
+                var dailyActivity = allCommits
+                    .GroupBy(c => DateOnly.FromDateTime(c.Commit.Date.DateTime))
+                    .OrderByDescending(g => g.Key)
+                    .Select(g => new
+                    {
+                        date = g.Key.ToString("yyyy-MM-dd"),
+                        totalCommits = g.Count(),
+                        projects = g.Select(c => c.Commit.Repository).Distinct().ToList(),
+                        commits = g.Select(c => new
+                        {
+                            repository = c.Commit.Repository,
+                            description = c.Commit.Description,
+                            author = c.Commit.Author,
+                            time = c.Commit.Date.ToString("HH:mm"),
+                            subscription = c.Subscription
+                        })
+                    })
+                    .ToList();
+
+                var repositories = allCommits
+                    .Select(c => c.Commit.Repository)
+                    .Distinct()
+                    .ToList();
+
+                // Collect any errors
+                var errors = azureResults
+                    .Where(r => r.Errors.Count > 0)
+                    .SelectMany(r => r.Errors.Select(e => new
+                    {
+                        subscription = r.Subscription?.Name,
+                        e.ErrorType,
+                        e.Message
+                    }))
+                    .ToList();
+
+                return JsonSerializer.Serialize(new
+                {
+                    success = true,
+                    source = "azuredevops",
+                    employeeId = username,
+                    startDate = startDate.ToString("yyyy-MM-dd"),
+                    endDate = endDate.ToString("yyyy-MM-dd"),
+                    totalCommits = allCommits.Count,
+                    repositories,
+                    subscriptions = azureResults.Select(r => r.Subscription?.Name).Where(n => n != null).Distinct(),
+                    dailyActivity,
+                    errors = errors.Count > 0 ? errors : null
+                }, _jsonOptions);
+            }
+
+            // Default: GitHub
             var result = await _gitScanningService.ScanGitHubAsync(
                 username,
                 startDate,
                 endDate,
                 cancellationToken);
-            
+
             return JsonSerializer.Serialize(new
             {
                 success = true,
+                source = "github",
                 username,
                 startDate = result.StartDate.ToString("yyyy-MM-dd"),
                 endDate = result.EndDate.ToString("yyyy-MM-dd"),
@@ -211,96 +215,6 @@ public class GitScanTools
                 success = false,
                 error = ex.Message
             }, _jsonOptions);
-        }
-    }
-
-    /// <summary>
-    /// Discover git repositories in a directory.
-    /// </summary>
-    [McpServerTool]
-    [Description("Find git repositories in a directory (searches up to 2 levels deep).")]
-    public async Task<string> DiscoverRepositories(
-        [Description("Base directory to search")] string baseDirectory,
-        [Description("Maximum search depth (default: 2)")] int maxDepth = 2,
-        CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            if (!Directory.Exists(baseDirectory))
-            {
-                return JsonSerializer.Serialize(new
-                {
-                    success = false,
-                    error = $"Directory '{baseDirectory}' does not exist."
-                }, _jsonOptions);
-            }
-            
-            var repositories = new List<object>();
-            
-            await ScanForRepositoriesAsync(baseDirectory, 0, maxDepth, repositories, cancellationToken);
-            
-            return JsonSerializer.Serialize(new
-            {
-                success = true,
-                baseDirectory,
-                count = repositories.Count,
-                repositories
-            }, _jsonOptions);
-        }
-        catch (Exception ex)
-        {
-            return JsonSerializer.Serialize(new
-            {
-                success = false,
-                error = ex.Message
-            }, _jsonOptions);
-        }
-    }
-    
-    private async Task ScanForRepositoriesAsync(
-        string directory,
-        int currentDepth,
-        int maxDepth,
-        List<object> repositories,
-        CancellationToken cancellationToken)
-    {
-        if (currentDepth > maxDepth || cancellationToken.IsCancellationRequested)
-            return;
-        
-        if (_localGitService.IsGitRepository(directory))
-        {
-            var name = await _localGitService.GetRepositoryNameAsync(directory, cancellationToken);
-            var branch = await _localGitService.GetCurrentBranchAsync(directory, cancellationToken);
-            var hasChanges = await _localGitService.HasUncommittedChangesAsync(directory, cancellationToken);
-            
-            repositories.Add(new
-            {
-                name,
-                path = directory,
-                branch,
-                hasUncommittedChanges = hasChanges
-            });
-            
-            return; // Don't scan subdirectories of a git repo
-        }
-        
-        try
-        {
-            foreach (var subDir in Directory.EnumerateDirectories(directory))
-            {
-                var dirName = Path.GetFileName(subDir);
-                
-                // Skip common non-project directories
-                if (dirName.StartsWith('.') || dirName == "node_modules" || 
-                    dirName == "bin" || dirName == "obj" || dirName == "vendor")
-                    continue;
-                
-                await ScanForRepositoriesAsync(subDir, currentDepth + 1, maxDepth, repositories, cancellationToken);
-            }
-        }
-        catch
-        {
-            // Skip directories we can't access
         }
     }
 }

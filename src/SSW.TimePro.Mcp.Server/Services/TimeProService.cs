@@ -159,6 +159,15 @@ public interface ITimeProService
     Task<List<RecentProjectDto>> GetRecentProjectsAsync(
         string employeeId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Get Azure DevOps commits for an employee via TimePro.
+    /// </summary>
+    Task<List<AzureDevOpsSubscriptionResult<AzureDevOpsGitChange>>> GetAzureDevOpsCommitsAsync(
+        string employeeId,
+        DateOnly startDate,
+        DateOnly endDate,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -582,5 +591,20 @@ public class TimeProService : ITimeProService
 
         var projects = await response.Content.ReadFromJsonAsync<List<RecentProjectDto>>(_jsonOptions, cancellationToken);
         return projects ?? [];
+    }
+
+    public async Task<List<AzureDevOpsSubscriptionResult<AzureDevOpsGitChange>>> GetAzureDevOpsCommitsAsync(
+        string employeeId,
+        DateOnly startDate,
+        DateOnly endDate,
+        CancellationToken cancellationToken = default)
+    {
+        var url = $"api/DevOps/GetAzureSubResult?empId={Uri.EscapeDataString(employeeId)}&startDate={startDate:yyyy-MM-dd}&endDate={endDate:yyyy-MM-dd}";
+
+        var response = await _httpClient.GetAsync(url, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        var results = await response.Content.ReadFromJsonAsync<List<AzureDevOpsSubscriptionResult<AzureDevOpsGitChange>>>(_jsonOptions, cancellationToken);
+        return results ?? [];
     }
 }

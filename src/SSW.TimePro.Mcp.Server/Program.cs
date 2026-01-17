@@ -28,8 +28,15 @@ builder.Configuration
 // Bind configuration
 builder.Services.Configure<TimeProSettings>(
     builder.Configuration.GetSection(TimeProSettings.SectionName));
-builder.Services.Configure<GitHubSettings>(
-    builder.Configuration.GetSection(GitHubSettings.SectionName));
+builder.Services.Configure<GitHubSettings>(options =>
+{
+    builder.Configuration.GetSection(GitHubSettings.SectionName).Bind(options);
+    // Support standard GITHUB_TOKEN env var as fallback
+    if (string.IsNullOrEmpty(options.Token))
+    {
+        options.Token = Environment.GetEnvironmentVariable("GITHUB_TOKEN") ?? "";
+    }
+});
 
 // Register HTTP clients with SSL bypass for local development
 builder.Services.AddHttpClient<ITimeProService, TimeProService>()
@@ -63,7 +70,7 @@ builder.Services.AddScoped<AppointmentTools>();
 builder.Services.AddScoped<TimesheetManagementTools>();
 builder.Services.AddScoped<ConfirmationTools>();
 builder.Services.AddScoped<GitScanTools>();
-builder.Services.AddScoped<AgendaTools>();
+builder.Services.AddScoped<RecommendTools>();
 
 // Configure MCP server with stdio transport
 builder.Services

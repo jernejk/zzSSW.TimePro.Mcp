@@ -37,7 +37,7 @@ public class TimesheetRequest
     [JsonPropertyName("timeLess")]
     public decimal TimeLess { get; set; }
     
-    [JsonPropertyName("note")]
+    [JsonPropertyName("Notes")]
     public string? Note { get; set; }
     
     [JsonPropertyName("billableID")]
