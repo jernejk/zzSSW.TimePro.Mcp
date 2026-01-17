@@ -1,0 +1,18 @@
+Help me create timesheets for Jan 12-16, 2026 using the ssw-timepro MCP server.
+
+IMPORTANT: mcp-cli uses JSON format. Example:
+  mcp-cli ssw-timepro/scan_local_repository '{"repositoryPath":"/path/to/repo","days":7}'
+  mcp-cli ssw-timepro/create_timesheet '{"employeeId":"JEK","clientId":"SSW","projectId":"4BPT0L","date":"2026-01-12","startTime":"09:00","endTime":"18:00","categoryId":"PROD","locationId":"SSW","billableId":"W","sellPrice":0,"timeLess":1,"dryRun":true}'
+
+Schedule:
+- Monday (Jan 12) & Friday (Jan 16): SSW.Rewards (client: SSW, project: 4BPT0L)
+- Tue-Thu (Jan 13-15): ASF Audits (client: LR8R0L, project: ASF)
+
+Steps:
+1. Scan /Users/jk/Developer/git/SSW.Rewards.Mobile for commits (days=14, author="jernej")
+2. Create 5 dry-run timesheets
+3. Show pending confirmations
+
+Config:
+- SSW.Rewards: employeeId="JEK", categoryId="PROD", locationId="SSW", billableId="W", sellPrice=0, timeLess=1, hours 09:00-18:00
+- ASF Audits: employeeId="JEK", categoryId="AUDIT", locationId="SSW", billableId="BILLABLE", sellPrice=325, timeLess=0, hours 09:00-17:00
