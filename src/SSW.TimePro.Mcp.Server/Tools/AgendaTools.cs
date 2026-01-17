@@ -5,6 +5,7 @@ using ModelContextProtocol.Server;
 using SSW.TimePro.Mcp.Server.Configuration;
 using SSW.TimePro.Mcp.Server.Models;
 using SSW.TimePro.Mcp.Server.Services;
+using SSW.TimePro.Mcp.Server.Services.Git;
 
 namespace SSW.TimePro.Mcp.Server.Tools;
 
@@ -15,7 +16,9 @@ namespace SSW.TimePro.Mcp.Server.Tools;
 public class RecommendTools
 {
     private readonly ITimeProService _timeProService;
+    private readonly IGitScanningService _gitScanningService;
     private readonly TimeProSettings _settings;
+    private readonly GitHubSettings _gitHubSettings;
     private static readonly JsonSerializerOptions _jsonOptions = new()
     {
         WriteIndented = true,
@@ -24,10 +27,14 @@ public class RecommendTools
 
     public RecommendTools(
         ITimeProService timeProService,
-        IOptions<TimeProSettings> settings)
+        IGitScanningService gitScanningService,
+        IOptions<TimeProSettings> settings,
+        IOptions<GitHubSettings> gitHubSettings)
     {
         _timeProService = timeProService;
+        _gitScanningService = gitScanningService;
         _settings = settings.Value;
+        _gitHubSettings = gitHubSettings.Value;
     }
 
     private string GetEmployeeId(string? providedId)
@@ -46,10 +53,11 @@ public class RecommendTools
     /// Get timesheet recommendation for a single day.
     /// </summary>
     [McpServerTool]
-    [Description("Get timesheet recommendation for a single day. Returns what's logged, what's suggested, and recent projects to choose from.")]
+    [Description("Get timesheet recommendation for a single day. Returns what's logged, what's suggested, recent projects, and git commits from GitHub/Azure DevOps.")]
     public async Task<string> RecommendDay(
         [Description("Date (yyyy-MM-dd). Defaults to today.")] string? date = null,
         [Description("Employee ID (e.g., 'JEK'). Optional if DefaultEmployeeId is configured.")] string? employeeId = null,
+        [Description("GitHub username for commit lookup. Optional if GitHub__Username is configured.")] string? githubUsername = null,
         CancellationToken cancellationToken = default)
     {
         try
@@ -108,6 +116,18 @@ public class RecommendTools
                 // Recent projects not available, continue without
             }
 
+            // Get GitHub commits if username is available
+            var gitHubCommits = await GetGitHubCommitsForDateAsync(
+                githubUsername ?? _gitHubSettings.Username,
+                targetDate,
+                cancellationToken);
+
+            // Get Azure DevOps commits
+            var azureDevOpsCommits = await GetAzureDevOpsCommitsForDateAsync(
+                empId,
+                targetDate,
+                cancellationToken);
+
             return JsonSerializer.Serialize(new
             {
                 success = true,
@@ -148,6 +168,11 @@ public class RecommendTools
                     start = b.Start,
                     end = b.End
                 }),
+                commits = new
+                {
+                    github = gitHubCommits,
+                    azureDevOps = azureDevOpsCommits
+                },
                 recentProjects = recentProjects?.Take(5).Select(p => new
                 {
                     clientId = p.ClientId,
@@ -176,10 +201,11 @@ public class RecommendTools
     /// Get timesheet recommendations for a week.
     /// </summary>
     [McpServerTool]
-    [Description("Get timesheet recommendations for an entire week. Shows status for each day and recent projects to use.")]
+    [Description("Get timesheet recommendations for an entire week. Shows status for each day, recent projects, and git commits from GitHub/Azure DevOps.")]
     public async Task<string> RecommendWeek(
         [Description("Start date (yyyy-MM-dd). Defaults to Monday of current week.")] string? startDate = null,
         [Description("Employee ID (e.g., 'JEK'). Optional if DefaultEmployeeId is configured.")] string? employeeId = null,
+        [Description("GitHub username for commit lookup. Optional if GitHub__Username is configured.")] string? githubUsername = null,
         CancellationToken cancellationToken = default)
     {
         try
@@ -202,6 +228,72 @@ public class RecommendTools
             catch
             {
                 // Recent projects not available, continue without
+            }
+
+            // Fetch GitHub commits for the whole week once
+            var gitHubUsername = githubUsername ?? _gitHubSettings.Username;
+            Dictionary<DateOnly, List<object>>? weeklyGitHubCommits = null;
+            if (!string.IsNullOrEmpty(gitHubUsername) && !string.IsNullOrEmpty(_gitHubSettings.Token))
+            {
+                try
+                {
+                    var gitHubResult = await _gitScanningService.ScanGitHubAsync(
+                        gitHubUsername, start, end, cancellationToken);
+
+                    // Group commits by date, then by repository, with full commit details
+                    weeklyGitHubCommits = gitHubResult.DailyActivity
+                        .ToDictionary(
+                            d => d.Date,
+                            d => d.Commits
+                                .GroupBy(c => c.Repository)
+                                .Select(g => (object)new
+                                {
+                                    repository = g.Key,
+                                    commits = g.Select(c => new
+                                    {
+                                        message = c.Subject,
+                                        time = c.Date.ToString("HH:mm"),
+                                        hash = c.ShortHash
+                                    }).ToList()
+                                })
+                                .ToList());
+                }
+                catch
+                {
+                    // GitHub not available, continue without
+                }
+            }
+
+            // Fetch Azure DevOps commits for the whole week once
+            Dictionary<DateOnly, List<object>>? weeklyAzureDevOpsCommits = null;
+            try
+            {
+                var azureResults = await _timeProService.GetAzureDevOpsCommitsAsync(
+                    empId, start, end, cancellationToken);
+
+                var allCommits = azureResults
+                    .SelectMany(r => r.Data.Select(c => new
+                    {
+                        Subscription = r.Subscription?.Name ?? "Unknown",
+                        Commit = c,
+                        Date = DateOnly.FromDateTime(c.Date.DateTime)
+                    }))
+                    .ToList();
+
+                weeklyAzureDevOpsCommits = allCommits
+                    .GroupBy(c => c.Date)
+                    .ToDictionary(
+                        g => g.Key,
+                        g => g.Select(c => (object)new
+                        {
+                            repository = c.Commit.Repository,
+                            description = c.Commit.Description,
+                            subscription = c.Subscription
+                        }).ToList());
+            }
+            catch
+            {
+                // Azure DevOps not available, continue without
             }
 
             var days = new List<object>();
@@ -243,6 +335,10 @@ public class RecommendTools
                     // CRM not available, ignore
                 }
 
+                // Get commits for this specific day from the weekly data
+                var dayGitHubCommits = weeklyGitHubCommits?.GetValueOrDefault(date) ?? [];
+                var dayAzureDevOpsCommits = weeklyAzureDevOpsCommits?.GetValueOrDefault(date) ?? [];
+
                 days.Add(new
                 {
                     date = date.ToString("yyyy-MM-dd"),
@@ -272,7 +368,12 @@ public class RecommendTools
                     {
                         clientId = b.ClientId,
                         title = b.Title
-                    })
+                    }),
+                    commits = new
+                    {
+                        github = dayGitHubCommits,
+                        azureDevOps = dayAzureDevOpsCommits
+                    }
                 });
             }
 
@@ -309,6 +410,67 @@ public class RecommendTools
                 success = false,
                 error = ex.Message
             }, _jsonOptions);
+        }
+    }
+
+    private async Task<List<object>> GetGitHubCommitsForDateAsync(
+        string? username,
+        DateOnly date,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(_gitHubSettings.Token))
+            return [];
+
+        try
+        {
+            var result = await _gitScanningService.ScanGitHubAsync(
+                username, date, date, cancellationToken);
+
+            // Return full commit details grouped by repository
+            return result.DailyActivity
+                .Where(d => d.Date == date)
+                .SelectMany(d => d.Commits)
+                .GroupBy(c => c.Repository)
+                .Select(g => (object)new
+                {
+                    repository = g.Key,
+                    commits = g.Select(c => new
+                    {
+                        message = c.Subject,
+                        time = c.Date.ToString("HH:mm"),
+                        hash = c.ShortHash
+                    }).ToList()
+                })
+                .ToList();
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    private async Task<List<object>> GetAzureDevOpsCommitsForDateAsync(
+        string employeeId,
+        DateOnly date,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var results = await _timeProService.GetAzureDevOpsCommitsAsync(
+                employeeId, date, date, cancellationToken);
+
+            return results
+                .SelectMany(r => r.Data.Select(c => (object)new
+                {
+                    repository = c.Repository,
+                    description = c.Description,
+                    subscription = r.Subscription?.Name ?? "Unknown"
+                }))
+                .ToList();
+        }
+        catch
+        {
+            return [];
         }
     }
 }

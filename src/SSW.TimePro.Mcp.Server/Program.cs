@@ -25,18 +25,34 @@ builder.Configuration
     .AddEnvironmentVariables()
     .AddUserSecrets<Program>(optional: true);
 
-// Bind configuration
-builder.Services.Configure<TimeProSettings>(
-    builder.Configuration.GetSection(TimeProSettings.SectionName));
+// Bind configuration with support for single underscore env vars (e.g., TIMEPRO_API_KEY)
+builder.Services.Configure<TimeProSettings>(options =>
+{
+    builder.Configuration.GetSection(TimeProSettings.SectionName).Bind(options);
+
+    // Support single-underscore env vars as fallback (more common convention)
+    options.BaseUrl = GetEnvOrDefault("TIMEPRO_BASE_URL", options.BaseUrl);
+    options.TenantId = GetEnvOrDefault("TIMEPRO_TENANT_ID", options.TenantId);
+    options.ApiKey = GetEnvOrDefault("TIMEPRO_API_KEY", options.ApiKey);
+    options.ConfirmPhrase = GetEnvOrDefault("TIMEPRO_CONFIRM_PHRASE", options.ConfirmPhrase);
+    options.DefaultEmployeeId = GetEnvOrDefault("TIMEPRO_DEFAULT_EMPLOYEE_ID", options.DefaultEmployeeId);
+});
+
 builder.Services.Configure<GitHubSettings>(options =>
 {
     builder.Configuration.GetSection(GitHubSettings.SectionName).Bind(options);
-    // Support standard GITHUB_TOKEN env var as fallback
-    if (string.IsNullOrEmpty(options.Token))
-    {
-        options.Token = Environment.GetEnvironmentVariable("GITHUB_TOKEN") ?? "";
-    }
+
+    // Support single-underscore and standard env vars as fallback
+    options.Token = GetEnvOrDefault("GITHUB_TOKEN", options.Token);
+    options.Username = GetEnvOrDefault("GITHUB_USERNAME", options.Username);
 });
+
+// Helper to get env var with fallback
+static string GetEnvOrDefault(string name, string defaultValue)
+{
+    var value = Environment.GetEnvironmentVariable(name);
+    return string.IsNullOrEmpty(value) ? defaultValue : value;
+}
 
 // Register HTTP clients with SSL bypass for local development
 builder.Services.AddHttpClient<ITimeProService, TimeProService>()
