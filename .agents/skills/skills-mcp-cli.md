@@ -1,7 +1,7 @@
 ---
 name: TimePro Timesheet Management
 description: AI-driven timesheet management using SSW TimePro MCP tools.
-version: 3.4.0
+version: 3.1.0
 ---
 
 # TimePro Timesheet Management
@@ -26,7 +26,8 @@ recommend_day()    # Get details for a specific day
 ### Creating Timesheets
 | Tool | When to Use |
 |------|-------------|
-| `create_timesheet` | Create a new timesheet (use `recentProjects` for project info) |
+| `accept_suggested_timesheet` | When `suggestedTimesheetId` exists in response |
+| `create_timesheet` | When no suggestion exists (use `recentProjects`) |
 
 ### Other Tools
 | Tool | Purpose |
@@ -34,8 +35,7 @@ recommend_day()    # Get details for a specific day
 | `search_clients` | Find clients by name |
 | `get_projects_for_client` | Get projects for a client |
 | `get_client_rate` | Get billable rate for a client |
-| `scan_local_repositories` | Get git commits from local repos (auto-filters to current git user) |
-| `scan_remote_commits` | Get user's commits from GitHub or Azure DevOps |
+| `scan_local_repository` | Get git commits from a local repo |
 | `confirm_operation` | Execute a dry-run operation |
 
 ## Understanding the Response
@@ -45,9 +45,15 @@ When you call `recommend_day` or `recommend_week`, you get:
 ### `existing`
 Confirmed timesheets already saved. Count these hours as done.
 
-### `suggested`
-Pre-filled templates from TimePro with project/client information pre-populated.
-Use these details when creating timesheets with `create_timesheet`.
+### `suggested` ⭐ IMPORTANT
+Pre-filled templates from TimePro. Each has a `suggestedTimesheetId`.
+
+**When `suggested` exists, you MUST use `accept_suggested_timesheet(suggestedTimesheetId)`**
+
+Why:
+- These are generated from historical patterns
+- They impact TimePro reports correctly
+- The `suggestedTimesheetId` is a template reference that gets converted to a real timesheet
 
 ### `crmBookings`
 Calendar appointments from CRM. Shows what client work was booked.
@@ -94,7 +100,7 @@ For each day with `hoursNeeded > 0`:
 
 ```
 IF suggested array has items:
-    → create_timesheet(...) using suggested clientId/projectId
+    → accept_suggested_timesheet(suggestedTimesheetId, notes?, location?)
 
 ELSE IF crmBookings exist:
     → create_timesheet(...) using booking's clientId/projectId
@@ -139,9 +145,7 @@ Better timesheet allocation:
 ### Implementation Steps
 
 1. Call `recommend_week()` to see all days
-2. Get commits via one of:
-   - `scan_local_repositories(repositoryPaths, days: 7)` - for local commits (auto-filters to git user.email)
-   - `scan_remote_commits(username, days: 7)` - for GitHub/Azure DevOps activity
+2. Call `scan_local_repository(days: 7)` to get all commits
 3. Group commits by project
 4. For days with 0 commits but same project as adjacent days:
    - Attribute work to that project
@@ -153,22 +157,20 @@ Better timesheet allocation:
 If the work pattern is ambiguous (multiple projects, gaps in activity), ask:
 > "I see commits for SSW.Rewards on Tuesday and Thursday, but none on Monday/Wednesday. Did you work on SSW.Rewards all week, or were those days different projects?"
 
-### Multiple Organizations/Repos on Same Day
-When commits span multiple orgs or unrelated projects on the same day:
-1. **Primary project** - Use the project with most commits or most recent activity
-2. **Ask about secondary repos** - Don't automatically include all repos in the timesheet
-
-Example:
-> "Friday has commits in both SSW.Rewards (main work) and SSW.TimePro.Mcp (side project). Should I:
-> 1. Log all 8h to SSW.Rewards (primary)
-> 2. Split time between both projects
-> 3. Log separately (you have multiple clients that day)"
-
-**Default behavior:** If user doesn't specify, attribute to the primary/most active project and mention the side work in notes if relevant.
-
 ## Creating Timesheets
 
-Use `create_timesheet` for all timesheet creation:
+### Option 1: From Suggestion (Preferred)
+When `suggested` array has items:
+```
+accept_suggested_timesheet(
+    suggestedTimesheetId: 217510,
+    notes: "Brief work summary",
+    location: "Home"
+)
+```
+
+### Option 2: Manual Creation
+When no suggestion exists:
 ```
 create_timesheet(
     employeeId: "JEK",
@@ -215,11 +217,11 @@ get_client_rate(employeeId, clientId)
 
 **AI Steps:**
 1. `recommend_week()` → see all days
-2. `scan_remote_commits(username, days: 7)` or `scan_local_repositories(paths)` → get commits
+2. `scan_local_repository(days: 7)` → get all commits for context
 3. Analyze commit patterns across the week
 4. For each day with `hoursNeeded > 0`:
-   - Use `suggested` or `recentProjects` for project info
-   - `create_timesheet(...)` with summarized notes
+   - Has `suggested`? → `accept_suggested_timesheet(id, notes)`
+   - No suggestion? → `create_timesheet(...)` with summarized notes
 5. Apply load balancing if commits are uneven
 6. `confirm_operation(id)` for each pending confirmation
 
@@ -233,97 +235,3 @@ get_client_rate(employeeId, clientId)
 | No suggestions, no recent projects | Ask user which project |
 | Day with 0 commits but same project as neighbors | Attribute to that project |
 | Day with 20+ commits | Summarize key themes, don't list all |
-
-## Output Formats
-
-### Weekly Agenda Summary
-
-When showing the week's timesheet status, use this format:
-
-```
-## Timesheet Status: Week of Jan 13, 2026
-
-| Day | Status | Hours | Project | Notes |
-|-----|--------|-------|---------|-------|
-| Mon | ✅ Done | 8h | SSW.Rewards | Notification UI improvements |
-| Tue | ⏳ Pending | 8h | SSW.Rewards | *3 commits - UI refinements* |
-| Wed | ⏳ Pending | 8h | HubX | *AI Auditor module setup* |
-| Thu | ❌ Missing | 0h | - | No activity found |
-| Fri | 📅 Today | 0h | - | In progress |
-
-**Summary:** 8/40 hours logged (20%)
-```
-
-Status icons:
-- ✅ Done - Timesheet exists
-- ⏳ Pending - Ready to create (has commits/suggestions)
-- ❌ Missing - No data, needs user input
-- 📅 Today - Current day, may be incomplete
-
-### Daily Recommendation
-
-When showing a single day recommendation:
-
-```
-## Friday, Jan 17, 2026
-
-**Status:** 8 hours needed
-
-### Git Activity (SSW.Rewards.Mobile)
-- Improved notification UI layout
-- Enhanced date/time controls styling
-- Fixed field alignment issues
-
-### Suggested Timesheet
-| Field | Value |
-|-------|-------|
-| Client | SSW |
-| Project | SSW.Rewards (4BPT0L) |
-| Hours | 8h (09:00-18:00, 1h lunch) |
-| Category | MOBDEV |
-| Location | Home |
-
-**Notes:** "SSW.Rewards: Notification UI improvements - layout, styling, and field controls"
-
-Ready to create? [Yes] [Edit notes] [Different project]
-```
-
-### Timesheet Creation Confirmation
-
-After creating timesheets:
-
-```
-## Timesheets Created
-
-| Day | Client | Project | Hours | Status |
-|-----|--------|---------|-------|--------|
-| Mon | SSW | SSW.Rewards | 8h | ✅ Created |
-| Tue | SSW | SSW.Rewards | 8h | ✅ Created |
-| Wed | ASF | HubX | 8h | ⏳ Pending confirmation |
-
-**Next:** Run `confirm_operation("abc123")` to finalize Wednesday's timesheet.
-```
-
-### Git Activity Summary
-
-When showing commit activity:
-
-```
-## Git Activity: Jan 13-17, 2026
-
-### By Project
-| Project | Commits | Days Active |
-|---------|---------|-------------|
-| SSW.Rewards.Mobile | 12 | Mon, Tue, Fri |
-| SSW.TimePro.Mcp | 3 | Thu |
-| HubX (local only) | 3 | Thu |
-
-### Daily Breakdown
-- **Mon (13th):** SSW.Rewards - 4 commits (notification setup)
-- **Tue (14th):** SSW.Rewards - 6 commits (UI implementation)
-- **Wed (15th):** No commits
-- **Thu (16th):** TimePro.Mcp + HubX - 6 commits (MCP tools, AI module)
-- **Fri (17th):** SSW.Rewards - 2 commits (bug fixes)
-
-*Note: HubX commits are local only (not pushed to GitHub)*
-```
