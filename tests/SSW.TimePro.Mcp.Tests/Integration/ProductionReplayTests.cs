@@ -61,8 +61,8 @@ public class ProductionReplayTests
         var repoPaths = new List<string> 
         { 
             "/Users/jk/Developer/git/SSW.Rewards.Mobile",
-            "/Users/jk/Developer/git/ASF/HubX", 
-            "/Users/jk/Developer/git/ASF/AI-Auditor" 
+            "/Users/jk/Developer/git/Northwind/HubX", 
+            "/Users/jk/Developer/git/Northwind/AI-Auditor" 
         };
 
         _output.WriteLine($"Generating agenda using Git paths: {string.Join(", ", repoPaths)}");

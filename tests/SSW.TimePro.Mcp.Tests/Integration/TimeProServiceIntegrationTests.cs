@@ -31,7 +31,7 @@ public class TimeProServiceIntegrationTests : IDisposable
         var settings = Options.Create(new TimeProSettings
         {
             BaseUrl = Environment.GetEnvironmentVariable("TIMEPRO_BASE_URL") 
-                      ?? "https://api.sswtimepro.com/",
+                      ?? "https://ssw.local-sswtimepro.com:7107/",
             TenantId = Environment.GetEnvironmentVariable("TIMEPRO_TENANT_ID") 
                        ?? "ssw",
             ApiKey = Environment.GetEnvironmentVariable("TIMEPRO_API_KEY")
