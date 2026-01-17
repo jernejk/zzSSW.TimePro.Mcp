@@ -43,9 +43,9 @@ public class TimeProSettingsTests
     {
         // Arrange
         var settings = new TimeProSettings();
-        
+
         // Assert
-        settings.AppName.Should().Be("JK-TimePro-MCP");
+        settings.AppName.Should().Be("SSW-TimePro-MCP");
     }
     
     [Theory]
