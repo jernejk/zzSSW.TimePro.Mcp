@@ -312,7 +312,8 @@ public class ConfirmationTools
         var payload = JsonSerializer.Deserialize<AcceptSuggestedTimesheetPayload>(json, _jsonOptions)
             ?? throw new InvalidOperationException("Invalid payload for accept suggested timesheet.");
         
-        return await _timeProService.AcceptSuggestedTimesheetAsync(payload.SuggestedTimesheetId, payload.NewSellPrice, cancellationToken);
+        return await _timeProService.AcceptSuggestedTimesheetAsync(
+            payload.SuggestedTimesheetId, payload.NewSellPrice, payload.Notes, payload.Location, cancellationToken);
     }
     
     private async Task<object> ExecuteBulkCreateTimesheetsAsync(string json, CancellationToken cancellationToken)
@@ -340,4 +341,4 @@ public class ConfirmationTools
 // Payload classes for deserialization
 file record DeleteTimesheetPayload(int TimesheetId);
 file record DeleteSuggestedTimesheetPayload(int SuggestedTimesheetId);
-file record AcceptSuggestedTimesheetPayload(int SuggestedTimesheetId, decimal? NewSellPrice);
+file record AcceptSuggestedTimesheetPayload(int SuggestedTimesheetId, decimal? NewSellPrice, string? Notes = null, string? Location = null);

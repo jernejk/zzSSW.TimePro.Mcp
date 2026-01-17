@@ -49,7 +49,7 @@ public class AgendaItem
     public AgendaConfidence Confidence { get; set; } = AgendaConfidence.Medium;
     
     [JsonPropertyName("hours")]
-    public decimal Hours => (decimal)(EndTime - StartTime).TotalHours;
+    public decimal Hours => (decimal)(EndTime - StartTime).TotalHours - (TimeLessMinutes / 60m);
     
     [JsonPropertyName("commits")]
     public List<GitCommit>? RelatedCommits { get; set; }
@@ -65,6 +65,13 @@ public class AgendaItem
     
     [JsonPropertyName("notes")]
     public string? Notes { get; set; }
+
+    /// <summary>
+    /// Lunch/break deduction in minutes (e.g., 60 for 1 hour lunch).
+    /// Applied to full-day entries from CRM bookings.
+    /// </summary>
+    [JsonPropertyName("timeLessMinutes")]
+    public int TimeLessMinutes { get; set; }
 
     /// <summary>
     /// Billable ID (e.g., 'BILLABLE', 'B', 'BPP', 'W' for internal).

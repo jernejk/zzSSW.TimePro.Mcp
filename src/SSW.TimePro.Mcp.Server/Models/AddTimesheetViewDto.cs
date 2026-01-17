@@ -190,3 +190,36 @@ public class RecentProjectDto
     [JsonPropertyName("lastUsed")]
     public DateTime LastUsed { get; set; }
 }
+
+/// <summary>
+/// Client rate information for an employee.
+/// </summary>
+public class ClientRateDto
+{
+    [JsonPropertyName("empId")]
+    public string EmpId { get; set; } = string.Empty;
+
+    [JsonPropertyName("clientId")]
+    public string ClientId { get; set; } = string.Empty;
+
+    [JsonPropertyName("rate")]
+    public decimal? Rate { get; set; }
+
+    [JsonPropertyName("prepaidRate")]
+    public decimal? PrepaidRate { get; set; }
+
+    [JsonPropertyName("clientRateID")]
+    public int? ClientRateId { get; set; }
+
+    [JsonPropertyName("employeeName")]
+    public string? EmployeeName { get; set; }
+
+    [JsonPropertyName("clientName")]
+    public string? ClientName { get; set; }
+
+    [JsonPropertyName("expiryDate")]
+    public DateTime? ExpiryDate { get; set; }
+
+    [JsonPropertyName("notes")]
+    public string? Notes { get; set; }
+}

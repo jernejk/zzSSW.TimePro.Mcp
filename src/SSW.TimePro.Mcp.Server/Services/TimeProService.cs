@@ -95,6 +95,15 @@ public interface ITimeProService
         string employeeId,
         string clientId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Get the employee's rate for a client.
+    /// </summary>
+    Task<ClientRateDto?> GetClientRateAsync(
+        string employeeId,
+        string clientId,
+        DateOnly? date = null,
+        CancellationToken cancellationToken = default);
     
     /// <summary>
     /// Create a new timesheet.
@@ -118,6 +127,8 @@ public interface ITimeProService
     Task<TimesheetResponse> AcceptSuggestedTimesheetAsync(
         int suggestedTimesheetId,
         decimal? newSellPrice = null,
+        string? notes = null,
+        string? location = null,
         CancellationToken cancellationToken = default);
     
     /// <summary>
@@ -348,7 +359,25 @@ public class TimeProService : ITimeProService
         var projects = await response.Content.ReadFromJsonAsync<List<ProjectForSelect>>(_jsonOptions, cancellationToken);
         return projects ?? [];
     }
-    
+
+    public async Task<ClientRateDto?> GetClientRateAsync(
+        string employeeId,
+        string clientId,
+        DateOnly? date = null,
+        CancellationToken cancellationToken = default)
+    {
+        var dateStr = (date ?? DateOnly.FromDateTime(DateTime.Today)).ToString("yyyy-MM-dd");
+        var url = $"{TimesheetApiPath}/GetClientRate?empID={employeeId}&clientID={Uri.EscapeDataString(clientId)}&timesheetDateCreated={dateStr}";
+
+        var response = await _httpClient.GetAsync(url, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            return null;
+        }
+
+        return await response.Content.ReadFromJsonAsync<ClientRateDto>(_jsonOptions, cancellationToken);
+    }
+
     public async Task<TimesheetResponse> CreateTimesheetAsync(
         TimesheetRequest request,
         bool dryRun = false,
@@ -425,13 +454,22 @@ public class TimeProService : ITimeProService
     public async Task<TimesheetResponse> AcceptSuggestedTimesheetAsync(
         int suggestedTimesheetId,
         decimal? newSellPrice = null,
+        string? notes = null,
+        string? location = null,
         CancellationToken cancellationToken = default)
     {
         var url = newSellPrice.HasValue
             ? $"{TimesheetApiPath}/AcceptSuggestedTimesheet?id={suggestedTimesheetId}&newSellPrice={newSellPrice.Value}"
             : $"{TimesheetApiPath}/AcceptSuggestedTimesheet?id={suggestedTimesheetId}";
-        
-        var response = await _httpClient.PostAsync(url, null, cancellationToken);
+
+        // Send modifications as request body (location and notes)
+        var modifications = new { location = location ?? "", notes = notes ?? "" };
+        var content = new StringContent(
+            System.Text.Json.JsonSerializer.Serialize(modifications),
+            System.Text.Encoding.UTF8,
+            "application/json");
+
+        var response = await _httpClient.PostAsync(url, content, cancellationToken);
         
         if (response.IsSuccessStatusCode)
         {

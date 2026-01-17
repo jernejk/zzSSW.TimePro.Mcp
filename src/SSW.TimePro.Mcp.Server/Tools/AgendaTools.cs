@@ -55,21 +55,14 @@ public class AgendaTools
     }
 
     /// <summary>
-    /// Generate a weekly agenda based on various data sources.
+    /// Suggest timesheets for a date range - the main entry point for timesheet automation.
     /// </summary>
     [McpServerTool]
-    [Description("Generate a weekly timesheet agenda by combining CRM bookings, suggested timesheets, existing entries, and git activity. Perfect for Friday timesheet catch-up!")]
-    public async Task<string> GenerateWeeklyAgenda(
+    [Description("Get timesheet suggestions for a date range. Shows what's already logged vs what needs to be created. This is the recommended starting point for timesheet automation.")]
+    public async Task<string> SuggestTimesheets(
         [Description("Employee ID (e.g., 'JEK'). Optional if DefaultEmployeeId is configured.")] string? employeeId = null,
         [Description("Start date (yyyy-MM-dd). Defaults to Monday of current week.")] string? startDate = null,
         [Description("End date (yyyy-MM-dd). Defaults to Friday of current week.")] string? endDate = null,
-        [Description("Comma-separated local git repo paths to scan (optional)")] string? localGitPaths = null,
-        [Description("GitHub username for activity (optional)")] string? gitHubUsername = null,
-        [Description("Default client ID if not detected")] string? defaultClientId = null,
-        [Description("Default project ID if not detected")] string? defaultProjectId = null,
-        [Description("Include existing timesheets (default: true)")] bool includeExisting = true,
-        [Description("Include CRM bookings (default: true)")] bool includeCrm = true,
-        [Description("Include suggested timesheets (default: true)")] bool includeSuggested = true,
         CancellationToken cancellationToken = default)
     {
         try
@@ -86,91 +79,148 @@ public class AgendaTools
                 ? DateOnly.FromDateTime(friday)
                 : DateOnly.Parse(endDate);
 
-            var options = new AgendaGenerationOptions
+            var days = new List<object>();
+            decimal totalExistingHours = 0;
+            decimal totalExpectedHours = 0;
+
+            // Process each day
+            for (var date = start; date <= end; date = date.AddDays(1))
             {
-                EmployeeId = empId,
-                StartDate = start,
-                EndDate = end,
-                IncludeExistingTimesheets = includeExisting,
-                IncludeCrmBookings = includeCrm,
-                IncludeSuggestedTimesheets = includeSuggested,
-                DefaultClientId = defaultClientId,
-                DefaultProjectId = defaultProjectId,
-                LocalGitPaths = string.IsNullOrEmpty(localGitPaths) 
-                    ? null 
-                    : localGitPaths.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList(),
-                GitHubUsername = gitHubUsername
-            };
-            
-            var agenda = await _agendaService.GenerateAgendaAsync(
-                options,
-                _timeProService,
-                !string.IsNullOrEmpty(localGitPaths) ? _gitScanningService : null,
-                cancellationToken);
-            
+                if (date.DayOfWeek == DayOfWeek.Saturday || date.DayOfWeek == DayOfWeek.Sunday)
+                    continue;
+
+                totalExpectedHours += 8;
+
+                // Get existing timesheets for this day
+                var existingTimesheets = await _timeProService.GetTimesheetsAsync(
+                    empId, date, date, cancellationToken);
+
+                var existingHours = existingTimesheets
+                    .Where(t => !t.IsSuggested)
+                    .Sum(t => t.TotalTime);
+
+                totalExistingHours += existingHours;
+
+                // If day is complete (8+ hours), just report it
+                if (existingHours >= 8)
+                {
+                    days.Add(new
+                    {
+                        date = date.ToString("yyyy-MM-dd"),
+                        day = date.DayOfWeek.ToString()[..3],
+                        status = "complete",
+                        existingHours,
+                        action = "none",
+                        existing = existingTimesheets
+                            .Where(t => !t.IsSuggested)
+                            .Select(t => new
+                            {
+                                timesheetId = t.TimeId,
+                                client = t.ClientId,
+                                project = t.ProjectId,
+                                hours = t.TotalTime
+                            })
+                    });
+                    continue;
+                }
+
+                // Day needs work - get suggestions
+                var suggestions = existingTimesheets
+                    .Where(t => t.IsSuggested)
+                    .ToList();
+
+                // Also get CRM bookings if available
+                List<AppointmentItem>? crmBookings = null;
+                try
+                {
+                    crmBookings = await _timeProService.GetAppointmentsAsync(
+                        empId, date, date, cancellationToken);
+                }
+                catch
+                {
+                    // CRM not available, ignore
+                }
+
+                // Build recommendations
+                var recommendations = new List<object>();
+
+                // Priority 1: Suggested timesheets from TimePro
+                foreach (var suggestion in suggestions)
+                {
+                    recommendations.Add(new
+                    {
+                        priority = 1,
+                        source = "suggested",
+                        action = "AcceptSuggestedTimesheet",
+                        suggestedTimesheetId = suggestion.TimeId,
+                        client = suggestion.ClientId,
+                        clientName = suggestion.Client,
+                        project = suggestion.ProjectId,
+                        projectName = suggestion.Project,
+                        hours = suggestion.TotalTime,
+                        isBillable = suggestion.IsBillable,
+                        notes = suggestion.Notes
+                    });
+                }
+
+                // Priority 2: CRM bookings
+                if (crmBookings != null)
+                {
+                    foreach (var booking in crmBookings)
+                    {
+                        // Skip if already covered by suggestion
+                        if (suggestions.Any(s => s.ClientId == booking.ClientId))
+                            continue;
+
+                        recommendations.Add(new
+                        {
+                            priority = 2,
+                            source = "crm",
+                            action = "CreateTimesheet",
+                            client = booking.ClientId,
+                            title = booking.Title,
+                            start = booking.Start,
+                            end = booking.End
+                        });
+                    }
+                }
+
+                days.Add(new
+                {
+                    date = date.ToString("yyyy-MM-dd"),
+                    day = date.DayOfWeek.ToString()[..3],
+                    status = existingHours > 0 ? "partial" : "empty",
+                    existingHours,
+                    hoursNeeded = 8 - existingHours,
+                    action = recommendations.Count > 0 ? "choose" : "manual",
+                    recommendations = recommendations.Count > 0 ? recommendations : null,
+                    existing = existingTimesheets
+                        .Where(t => !t.IsSuggested)
+                        .Select(t => new
+                        {
+                            timesheetId = t.TimeId,
+                            client = t.ClientId,
+                            project = t.ProjectId,
+                            hours = t.TotalTime
+                        })
+                });
+            }
+
             return JsonSerializer.Serialize(new
             {
                 success = true,
-                agendaId = agenda.AgendaId,
                 employeeId = empId,
-                startDate = start.ToString("yyyy-MM-dd"),
-                endDate = end.ToString("yyyy-MM-dd"),
-                totalHours = agenda.TotalHours,
-                expectedHours = agenda.ExpectedHours,
-                completionPercentage = agenda.CompletionPercentage,
-                allProjects = agenda.AllProjects,
-                daysNeedingAttention = agenda.DaysNeedingAttention.Select(d => d.ToString("yyyy-MM-dd")),
-                recentProjects = agenda.RecentProjects.Select(p => new
+                summary = new
                 {
-                    p.ClientId,
-                    p.ClientName,
-                    p.ProjectId,
-                    p.ProjectName,
-                    p.IsBillable,
-                    p.UsageCount,
-                    lastUsedDate = p.LastUsedDate.ToString("yyyy-MM-dd")
-                }),
-                days = agenda.Days.Select(d => new
-                {
-                    date = d.Date.ToString("yyyy-MM-dd"),
-                    d.DayOfWeek,
-                    d.IsWeekend,
-                    status = d.Status.ToString(),
-                    totalHours = d.TotalHours,
-                    itemCount = d.Items.Count,
-                    selectedItem = d.SelectedItem != null ? new
-                    {
-                        d.SelectedItem.ClientId,
-                        d.SelectedItem.ProjectId,
-                        d.SelectedItem.IsBillable,
-                        source = d.SelectedItem.Source.ToString()
-                    } : null,
-                    alternativeCount = d.AlternativeItems.Count,
-                    items = d.Items.Select(i => new
-                    {
-                        startTime = i.StartTime.ToString("HH:mm"),
-                        endTime = i.EndTime.ToString("HH:mm"),
-                        hours = i.Hours,
-                        i.ClientId,
-                        i.ProjectId,
-                        i.Description,
-                        source = i.Source.ToString(),
-                        confidence = i.Confidence.ToString(),
-                        i.IsBillable,
-                        i.ExistingTimesheetId,
-                        i.SuggestedTimesheetId,
-                        i.CrmBookingId,
-                        alternatives = i.Alternatives?.Select(a => new
-                        {
-                            a.ClientId,
-                            a.ProjectId,
-                            a.IsBillable,
-                            source = a.Source.ToString()
-                        })
-                    })
-                }),
-                message = $"Agenda generated with {agenda.TotalHours:F1}/{agenda.ExpectedHours:F0} hours ({agenda.CompletionPercentage}% complete). " +
-                          $"{agenda.RecentProjects.Count} recent projects available. Use ExportAgendaToMarkdown for review."
+                    existingHours = totalExistingHours,
+                    expectedHours = totalExpectedHours,
+                    hoursNeeded = Math.Max(0, totalExpectedHours - totalExistingHours),
+                    complete = totalExistingHours >= totalExpectedHours
+                },
+                days,
+                help = totalExistingHours >= totalExpectedHours
+                    ? "All timesheets complete for this period."
+                    : "Use AcceptSuggestedTimesheet(suggestedTimesheetId, notes?, location?) for suggestions, or CreateTimesheet for manual entry."
             }, _jsonOptions);
         }
         catch (Exception ex)
@@ -180,58 +230,6 @@ public class AgendaTools
                 success = false,
                 error = ex.Message
             }, _jsonOptions);
-        }
-    }
-
-    /// <summary>
-    /// Export agenda to Markdown format.
-    /// </summary>
-    [McpServerTool]
-    [Description("Export a generated agenda to Markdown format for easy review and modification.")]
-    public async Task<string> ExportAgendaToMarkdown(
-        [Description("Employee ID (e.g., 'JEK'). Optional if DefaultEmployeeId is configured.")] string? employeeId = null,
-        [Description("Start date (yyyy-MM-dd). Defaults to Monday of current week.")] string? startDate = null,
-        [Description("End date (yyyy-MM-dd). Defaults to Friday of current week.")] string? endDate = null,
-        [Description("Comma-separated local git repo paths to scan (optional)")] string? localGitPaths = null,
-        CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            var empId = GetEmployeeId(employeeId);
-            var today = DateTime.Today;
-            var monday = today.AddDays(-(int)today.DayOfWeek + (int)DayOfWeek.Monday);
-            var friday = monday.AddDays(4);
-
-            var start = string.IsNullOrEmpty(startDate)
-                ? DateOnly.FromDateTime(monday)
-                : DateOnly.Parse(startDate);
-            var end = string.IsNullOrEmpty(endDate)
-                ? DateOnly.FromDateTime(friday)
-                : DateOnly.Parse(endDate);
-
-            var options = new AgendaGenerationOptions
-            {
-                EmployeeId = empId,
-                StartDate = start,
-                EndDate = end,
-                LocalGitPaths = string.IsNullOrEmpty(localGitPaths) 
-                    ? null 
-                    : localGitPaths.Split(',').ToList()
-            };
-            
-            var agenda = await _agendaService.GenerateAgendaAsync(
-                options,
-                _timeProService,
-                !string.IsNullOrEmpty(localGitPaths) ? _gitScanningService : null,
-                cancellationToken);
-            
-            var markdown = _agendaService.ExportToMarkdown(agenda);
-            
-            return markdown;
-        }
-        catch (Exception ex)
-        {
-            return $"# Error\n\nFailed to generate agenda: {ex.Message}";
         }
     }
 

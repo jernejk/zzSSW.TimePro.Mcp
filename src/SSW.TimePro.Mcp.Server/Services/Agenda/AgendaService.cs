@@ -196,9 +196,13 @@ public class AgendaService : IAgendaService
                     var start = TimeOnly.FromDateTime(bookingStart);
                     var end = TimeOnly.FromDateTime(bookingEnd);
                     
-                    if (!day.Items.Any(i => i.ExistingTimesheetId.HasValue && 
+                    if (!day.Items.Any(i => i.ExistingTimesheetId.HasValue &&
                         OverlapsTime(i.StartTime, i.EndTime, start, end)))
                     {
+                        // Apply timeLess for full-day bookings (6+ hours)
+                        var rawHours = (end - start).TotalHours;
+                        var timeLess = rawHours >= 6 ? options.TimeLessMinutes : 0;
+
                         day.Items.Add(new AgendaItem
                         {
                             Date = date,
@@ -211,7 +215,8 @@ public class AgendaService : IAgendaService
                             Confidence = AgendaConfidence.High,
                             CrmBookingId = booking.Id,
                             CategoryId = options.DefaultCategoryId,
-                            LocationId = options.DefaultLocationId
+                            LocationId = options.DefaultLocationId,
+                            TimeLessMinutes = timeLess
                         });
                     }
                 }
@@ -252,6 +257,10 @@ public class AgendaService : IAgendaService
                     var start = TimeOnly.FromDateTime(suggestion.StartTime);
                     var end = TimeOnly.FromDateTime(suggestion.EndTime);
 
+                    // Apply timeLess for full-day suggestions (6+ hours)
+                    var rawHours = (end - start).TotalHours;
+                    var timeLess = rawHours >= 6 ? options.TimeLessMinutes : 0;
+
                     return new AgendaItem
                     {
                         Date = day.Date,
@@ -267,7 +276,8 @@ public class AgendaService : IAgendaService
                         CategoryId = suggestion.Category ?? options.DefaultCategoryId,
                         LocationId = options.DefaultLocationId,
                         IsBillable = suggestion.IsBillable,
-                        SuggestedTimesheetId = suggestion.TimeId
+                        SuggestedTimesheetId = suggestion.TimeId,
+                        TimeLessMinutes = timeLess
                     };
                 }).ToList();
 
@@ -356,7 +366,8 @@ public class AgendaService : IAgendaService
                         Notes = notes,
                         Source = AgendaItemSource.GitActivity,
                         Confidence = AgendaConfidence.Low,
-                        RelatedCommits = dayActivity.Commits
+                        RelatedCommits = dayActivity.Commits,
+                        TimeLessMinutes = options.TimeLessMinutes
                     });
                 }
             }
@@ -391,7 +402,8 @@ public class AgendaService : IAgendaService
             Notes = string.Join("\n", commits.Take(10).Select(c => $"- {c.Subject}")),
             Source = AgendaItemSource.GitActivity,
             Confidence = AgendaConfidence.Medium,
-            RelatedCommits = commits
+            RelatedCommits = commits,
+            TimeLessMinutes = options.TimeLessMinutes
         };
     }
     
@@ -585,7 +597,8 @@ public class AgendaService : IAgendaService
                 Source = AgendaItemSource.Pattern,
                 Confidence = AgendaConfidence.Medium,
                 BillableId = primaryProject.BillableId,
-                IsBillable = primaryProject.IsBillable
+                IsBillable = primaryProject.IsBillable,
+                TimeLessMinutes = options.TimeLessMinutes
             };
 
             // Add other recent projects as alternatives
@@ -607,7 +620,8 @@ public class AgendaService : IAgendaService
                     Source = AgendaItemSource.Pattern,
                     Confidence = AgendaConfidence.Low,
                     BillableId = p.BillableId,
-                    IsBillable = p.IsBillable
+                    IsBillable = p.IsBillable,
+                    TimeLessMinutes = options.TimeLessMinutes
                 })
                 .ToList();
 

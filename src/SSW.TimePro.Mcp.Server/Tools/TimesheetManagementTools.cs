@@ -169,6 +169,55 @@ public class TimesheetManagementTools
     }
 
     /// <summary>
+    /// Get the employee's billable rate for a client.
+    /// </summary>
+    [McpServerTool]
+    [Description("Get the employee's billable rate for a specific client. Useful for determining sellPrice when creating billable timesheets.")]
+    public async Task<string> GetClientRate(
+        [Description("The employee ID (e.g., 'JEK')")] string employeeId,
+        [Description("The client ID")] string clientId,
+        [Description("Date for rate lookup (yyyy-MM-dd). Defaults to today.")] string? date = null,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var dateOnly = string.IsNullOrEmpty(date) ? (DateOnly?)null : DateOnly.Parse(date);
+            var rate = await _timeProService.GetClientRateAsync(
+                employeeId, clientId, dateOnly, cancellationToken);
+
+            if (rate == null)
+            {
+                return JsonSerializer.Serialize(new
+                {
+                    success = false,
+                    message = $"No rate found for employee {employeeId} with client {clientId}"
+                }, _jsonOptions);
+            }
+
+            return JsonSerializer.Serialize(new
+            {
+                success = true,
+                employeeId = rate.EmpId,
+                clientId = rate.ClientId,
+                rate = rate.Rate,
+                prepaidRate = rate.PrepaidRate,
+                employeeName = rate.EmployeeName,
+                clientName = rate.ClientName,
+                expiryDate = rate.ExpiryDate?.ToString("yyyy-MM-dd"),
+                notes = rate.Notes
+            }, _jsonOptions);
+        }
+        catch (Exception ex)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                success = false,
+                error = ex.Message
+            }, _jsonOptions);
+        }
+    }
+
+    /// <summary>
     /// Create a new timesheet.
     /// </summary>
     [McpServerTool]
@@ -345,6 +394,8 @@ public class TimesheetManagementTools
     public async Task<string> AcceptSuggestedTimesheet(
         [Description("The suggested timesheet ID to accept")] int suggestedTimesheetId,
         [Description("New sell price (optional, to override the suggested rate)")] decimal? newSellPrice = null,
+        [Description("Notes/description for the timesheet (optional, overrides suggested notes)")] string? notes = null,
+        [Description("Location ID (optional, e.g., 'Home', 'SSW')")] string? location = null,
         CancellationToken cancellationToken = default)
     {
         try
@@ -354,7 +405,7 @@ public class TimesheetManagementTools
             if (blocked != null) return blocked;
 
             var response = await _timeProService.AcceptSuggestedTimesheetAsync(
-                suggestedTimesheetId, newSellPrice, cancellationToken);
+                suggestedTimesheetId, newSellPrice, notes, location, cancellationToken);
             
             return JsonSerializer.Serialize(new
             {
