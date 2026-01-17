@@ -47,6 +47,12 @@ public class TimeProSettings
     public string ConfirmPhrase { get; set; } = string.Empty;
 
     /// <summary>
+    /// Default employee ID for tools (e.g., 'JEK').
+    /// When set, tools will use this as the default employee instead of requiring it.
+    /// </summary>
+    public string DefaultEmployeeId { get; set; } = string.Empty;
+
+    /// <summary>
     /// Returns true if currently connected to production environment.
     /// </summary>
     public bool IsProduction => BaseUrl.Contains("api.sswtimepro.com") &&

@@ -65,6 +65,32 @@ public class AgendaItem
     
     [JsonPropertyName("notes")]
     public string? Notes { get; set; }
+
+    /// <summary>
+    /// Billable ID (e.g., 'BILLABLE', 'B', 'BPP', 'W' for internal).
+    /// Used for prioritization: billable client work > internal work > leave.
+    /// </summary>
+    [JsonPropertyName("billableId")]
+    public string? BillableId { get; set; }
+
+    /// <summary>
+    /// True if this is billable client work (B, BPP, BILLABLE types).
+    /// </summary>
+    [JsonPropertyName("isBillable")]
+    public bool IsBillable { get; set; }
+
+    /// <summary>
+    /// Suggested timesheet ID if this came from a suggested timesheet.
+    /// </summary>
+    [JsonPropertyName("suggestedTimesheetId")]
+    public int? SuggestedTimesheetId { get; set; }
+
+    /// <summary>
+    /// Alternative options for this time slot (e.g., internal work vs client work).
+    /// The main item is the recommended choice; alternatives are other valid options.
+    /// </summary>
+    [JsonPropertyName("alternatives")]
+    public List<AgendaItem>? Alternatives { get; set; }
 }
 
 /// <summary>
@@ -127,6 +153,25 @@ public class DayAgenda
     
     [JsonPropertyName("status")]
     public DayAgendaStatus Status { get; set; } = DayAgendaStatus.Empty;
+
+    /// <summary>
+    /// The primary/selected item for this day (billable client work prioritized).
+    /// </summary>
+    [JsonPropertyName("selectedItem")]
+    public AgendaItem? SelectedItem => Items
+        .Where(i => i.Source != AgendaItemSource.ExistingTimesheet || i.ExistingTimesheetId.HasValue)
+        .OrderByDescending(i => i.IsBillable)
+        .ThenByDescending(i => i.Confidence)
+        .ThenBy(i => i.Source == AgendaItemSource.SuggestedTimesheet ? 0 : 1)
+        .FirstOrDefault();
+
+    /// <summary>
+    /// Alternative options that were not selected as primary.
+    /// </summary>
+    [JsonPropertyName("alternativeItems")]
+    public List<AgendaItem> AlternativeItems => Items
+        .Where(i => i != SelectedItem && i.Source != AgendaItemSource.ExistingTimesheet)
+        .ToList();
 }
 
 /// <summary>
@@ -162,8 +207,14 @@ public class WeeklyAgenda
     [JsonPropertyName("totalHours")]
     public decimal TotalHours => Days.Sum(d => d.TotalHours);
     
+    /// <summary>
+    /// Work hours per day (set from employee settings, default 8).
+    /// </summary>
+    [JsonPropertyName("workHoursPerDay")]
+    public decimal WorkHoursPerDay { get; set; } = 8;
+
     [JsonPropertyName("expectedHours")]
-    public decimal ExpectedHours => Days.Count(d => !d.IsWeekend) * 8;
+    public decimal ExpectedHours => Days.Count(d => !d.IsWeekend) * WorkHoursPerDay;
     
     [JsonPropertyName("completionPercentage")]
     public decimal CompletionPercentage => ExpectedHours > 0 
@@ -189,6 +240,13 @@ public class WeeklyAgenda
     
     [JsonPropertyName("agendaId")]
     public string AgendaId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Recent projects from the last 14 days, sorted by usage frequency.
+    /// Use these for fallback when no suggested timesheets exist.
+    /// </summary>
+    [JsonPropertyName("recentProjects")]
+    public List<RecentProject> RecentProjects { get; set; } = [];
 }
 
 /// <summary>
@@ -234,9 +292,22 @@ public class AgendaGenerationOptions
     
     [JsonPropertyName("defaultStartTime")]
     public TimeOnly DefaultStartTime { get; set; } = new(9, 0);
-    
+
     [JsonPropertyName("defaultEndTime")]
-    public TimeOnly DefaultEndTime { get; set; } = new(17, 0);
+    public TimeOnly DefaultEndTime { get; set; } = new(18, 0);
+
+    /// <summary>
+    /// Lunch break duration in minutes (typically 60).
+    /// Subtracted from total time span to get actual work hours.
+    /// </summary>
+    [JsonPropertyName("timeLessMinutes")]
+    public int TimeLessMinutes { get; set; } = 60;
+
+    /// <summary>
+    /// Calculated work hours per day (end - start - lunch).
+    /// </summary>
+    [JsonIgnore]
+    public decimal WorkHoursPerDay => (decimal)(DefaultEndTime - DefaultStartTime).TotalHours - (TimeLessMinutes / 60m);
 }
 
 /// <summary>
@@ -257,4 +328,49 @@ public class WorkPatterns
     public Dictionary<DayOfWeek, List<string>> DayProjectMap { get; set; } = [];
     public bool HasMultiProjectDays { get; set; }
     public bool ConsistentSchedule { get; set; }
+}
+
+/// <summary>
+/// A recent project from historical timesheets.
+/// </summary>
+public class RecentProject
+{
+    [JsonPropertyName("clientId")]
+    public string ClientId { get; set; } = string.Empty;
+
+    [JsonPropertyName("clientName")]
+    public string? ClientName { get; set; }
+
+    [JsonPropertyName("projectId")]
+    public string ProjectId { get; set; } = string.Empty;
+
+    [JsonPropertyName("projectName")]
+    public string? ProjectName { get; set; }
+
+    [JsonPropertyName("categoryId")]
+    public string CategoryId { get; set; } = "DEV";
+
+    [JsonPropertyName("billableId")]
+    public string? BillableId { get; set; }
+
+    [JsonPropertyName("isBillable")]
+    public bool IsBillable { get; set; }
+
+    /// <summary>
+    /// Number of times this project was used in recent timesheets.
+    /// </summary>
+    [JsonPropertyName("usageCount")]
+    public int UsageCount { get; set; }
+
+    /// <summary>
+    /// Most recent date this project was used.
+    /// </summary>
+    [JsonPropertyName("lastUsedDate")]
+    public DateOnly LastUsedDate { get; set; }
+
+    /// <summary>
+    /// Average hours per day on this project.
+    /// </summary>
+    [JsonPropertyName("averageHours")]
+    public decimal AverageHours { get; set; }
 }

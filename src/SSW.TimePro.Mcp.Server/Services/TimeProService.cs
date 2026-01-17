@@ -141,6 +141,13 @@ public interface ITimeProService
     /// </summary>
     Task<EmployeeSettings> GetEmployeeSettingsAsync(
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Get recent projects for an employee from the API.
+    /// </summary>
+    Task<List<RecentProjectDto>> GetRecentProjectsAsync(
+        string employeeId,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -524,5 +531,18 @@ public class TimeProService : ITimeProService
         response.EnsureSuccessStatusCode();
         var settings = await response.Content.ReadFromJsonAsync<EmployeeSettings>(_jsonOptions, cancellationToken);
         return settings ?? new EmployeeSettings();
+    }
+
+    public async Task<List<RecentProjectDto>> GetRecentProjectsAsync(
+        string employeeId,
+        CancellationToken cancellationToken = default)
+    {
+        var url = $"api/Projects/GetRecentProjects?empId={Uri.EscapeDataString(employeeId)}";
+
+        var response = await _httpClient.GetAsync(url, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        var projects = await response.Content.ReadFromJsonAsync<List<RecentProjectDto>>(_jsonOptions, cancellationToken);
+        return projects ?? [];
     }
 }

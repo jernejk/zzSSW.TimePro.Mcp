@@ -138,16 +138,55 @@ public class ProjectForSelect
 {
     [JsonPropertyName("value")]
     public string Value { get; set; } = string.Empty;
-    
+
     [JsonPropertyName("displayText")]
     public string DisplayText { get; set; } = string.Empty;
-    
+
     [JsonPropertyName("useIteration")]
     public bool UseIteration { get; set; }
-    
+
     [JsonPropertyName("isGeneral")]
     public bool IsGeneral { get; set; }
-    
+
     [JsonPropertyName("isLeave")]
     public bool IsLeave { get; set; }
+}
+
+/// <summary>
+/// Recent project from the GetRecentProjects API endpoint.
+/// </summary>
+public class RecentProjectDto
+{
+    [JsonPropertyName("clientID")]
+    public string ClientId { get; set; } = string.Empty;
+
+    [JsonPropertyName("clientName")]
+    public string? ClientName { get; set; }
+
+    [JsonPropertyName("projectID")]
+    public string ProjectId { get; set; } = string.Empty;
+
+    [JsonPropertyName("projectName")]
+    public string? ProjectName { get; set; }
+
+    [JsonPropertyName("categoryID")]
+    public string CategoryId { get; set; } = string.Empty;
+
+    [JsonPropertyName("categoryName")]
+    public string? CategoryName { get; set; }
+
+    [JsonPropertyName("billableID")]
+    public string? BillableId { get; set; }
+
+    [JsonPropertyName("isBillable")]
+    public bool IsBillable { get; set; }
+
+    [JsonPropertyName("totalHours")]
+    public decimal TotalHours { get; set; }
+
+    [JsonPropertyName("timesheetCount")]
+    public int TimesheetCount { get; set; }
+
+    [JsonPropertyName("lastUsed")]
+    public DateTime LastUsed { get; set; }
 }

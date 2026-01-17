@@ -1,6 +1,8 @@
 using System.ComponentModel;
 using System.Text.Json;
+using Microsoft.Extensions.Options;
 using ModelContextProtocol.Server;
+using SSW.TimePro.Mcp.Server.Configuration;
 using SSW.TimePro.Mcp.Server.Models;
 using SSW.TimePro.Mcp.Server.Services;
 using SSW.TimePro.Mcp.Server.Services.Agenda;
@@ -19,6 +21,7 @@ public class AgendaTools
     private readonly ITimeProService _timeProService;
     private readonly IGitScanningService _gitScanningService;
     private readonly IConfirmationService _confirmationService;
+    private readonly TimeProSettings _settings;
     private static readonly JsonSerializerOptions _jsonOptions = new()
     {
         WriteIndented = true,
@@ -29,12 +32,26 @@ public class AgendaTools
         IAgendaService agendaService,
         ITimeProService timeProService,
         IGitScanningService gitScanningService,
-        IConfirmationService confirmationService)
+        IConfirmationService confirmationService,
+        IOptions<TimeProSettings> settings)
     {
         _agendaService = agendaService;
         _timeProService = timeProService;
         _gitScanningService = gitScanningService;
         _confirmationService = confirmationService;
+        _settings = settings.Value;
+    }
+
+    private string GetEmployeeId(string? providedId)
+    {
+        if (!string.IsNullOrEmpty(providedId))
+            return providedId;
+
+        if (!string.IsNullOrEmpty(_settings.DefaultEmployeeId))
+            return _settings.DefaultEmployeeId;
+
+        throw new InvalidOperationException(
+            "Employee ID is required. Either provide it as a parameter or set TimePro__DefaultEmployeeId in configuration.");
     }
 
     /// <summary>
@@ -43,7 +60,7 @@ public class AgendaTools
     [McpServerTool]
     [Description("Generate a weekly timesheet agenda by combining CRM bookings, suggested timesheets, existing entries, and git activity. Perfect for Friday timesheet catch-up!")]
     public async Task<string> GenerateWeeklyAgenda(
-        [Description("Employee ID (e.g., 'JEK')")] string employeeId,
+        [Description("Employee ID (e.g., 'JEK'). Optional if DefaultEmployeeId is configured.")] string? employeeId = null,
         [Description("Start date (yyyy-MM-dd). Defaults to Monday of current week.")] string? startDate = null,
         [Description("End date (yyyy-MM-dd). Defaults to Friday of current week.")] string? endDate = null,
         [Description("Comma-separated local git repo paths to scan (optional)")] string? localGitPaths = null,
@@ -57,20 +74,21 @@ public class AgendaTools
     {
         try
         {
+            var empId = GetEmployeeId(employeeId);
             var today = DateTime.Today;
             var monday = today.AddDays(-(int)today.DayOfWeek + (int)DayOfWeek.Monday);
             var friday = monday.AddDays(4);
-            
-            var start = string.IsNullOrEmpty(startDate) 
-                ? DateOnly.FromDateTime(monday) 
+
+            var start = string.IsNullOrEmpty(startDate)
+                ? DateOnly.FromDateTime(monday)
                 : DateOnly.Parse(startDate);
-            var end = string.IsNullOrEmpty(endDate) 
-                ? DateOnly.FromDateTime(friday) 
+            var end = string.IsNullOrEmpty(endDate)
+                ? DateOnly.FromDateTime(friday)
                 : DateOnly.Parse(endDate);
-            
+
             var options = new AgendaGenerationOptions
             {
-                EmployeeId = employeeId,
+                EmployeeId = empId,
                 StartDate = start,
                 EndDate = end,
                 IncludeExistingTimesheets = includeExisting,
@@ -94,7 +112,7 @@ public class AgendaTools
             {
                 success = true,
                 agendaId = agenda.AgendaId,
-                employeeId,
+                employeeId = empId,
                 startDate = start.ToString("yyyy-MM-dd"),
                 endDate = end.ToString("yyyy-MM-dd"),
                 totalHours = agenda.TotalHours,
@@ -102,6 +120,16 @@ public class AgendaTools
                 completionPercentage = agenda.CompletionPercentage,
                 allProjects = agenda.AllProjects,
                 daysNeedingAttention = agenda.DaysNeedingAttention.Select(d => d.ToString("yyyy-MM-dd")),
+                recentProjects = agenda.RecentProjects.Select(p => new
+                {
+                    p.ClientId,
+                    p.ClientName,
+                    p.ProjectId,
+                    p.ProjectName,
+                    p.IsBillable,
+                    p.UsageCount,
+                    lastUsedDate = p.LastUsedDate.ToString("yyyy-MM-dd")
+                }),
                 days = agenda.Days.Select(d => new
                 {
                     date = d.Date.ToString("yyyy-MM-dd"),
@@ -110,6 +138,14 @@ public class AgendaTools
                     status = d.Status.ToString(),
                     totalHours = d.TotalHours,
                     itemCount = d.Items.Count,
+                    selectedItem = d.SelectedItem != null ? new
+                    {
+                        d.SelectedItem.ClientId,
+                        d.SelectedItem.ProjectId,
+                        d.SelectedItem.IsBillable,
+                        source = d.SelectedItem.Source.ToString()
+                    } : null,
+                    alternativeCount = d.AlternativeItems.Count,
                     items = d.Items.Select(i => new
                     {
                         startTime = i.StartTime.ToString("HH:mm"),
@@ -120,11 +156,21 @@ public class AgendaTools
                         i.Description,
                         source = i.Source.ToString(),
                         confidence = i.Confidence.ToString(),
+                        i.IsBillable,
                         i.ExistingTimesheetId,
-                        i.CrmBookingId
+                        i.SuggestedTimesheetId,
+                        i.CrmBookingId,
+                        alternatives = i.Alternatives?.Select(a => new
+                        {
+                            a.ClientId,
+                            a.ProjectId,
+                            a.IsBillable,
+                            source = a.Source.ToString()
+                        })
                     })
                 }),
-                message = $"Agenda generated with {agenda.TotalHours:F1}/{agenda.ExpectedHours:F0} hours ({agenda.CompletionPercentage}% complete). Use ExportAgendaToMarkdown for review."
+                message = $"Agenda generated with {agenda.TotalHours:F1}/{agenda.ExpectedHours:F0} hours ({agenda.CompletionPercentage}% complete). " +
+                          $"{agenda.RecentProjects.Count} recent projects available. Use ExportAgendaToMarkdown for review."
             }, _jsonOptions);
         }
         catch (Exception ex)
@@ -143,7 +189,7 @@ public class AgendaTools
     [McpServerTool]
     [Description("Export a generated agenda to Markdown format for easy review and modification.")]
     public async Task<string> ExportAgendaToMarkdown(
-        [Description("Employee ID (e.g., 'JEK')")] string employeeId,
+        [Description("Employee ID (e.g., 'JEK'). Optional if DefaultEmployeeId is configured.")] string? employeeId = null,
         [Description("Start date (yyyy-MM-dd). Defaults to Monday of current week.")] string? startDate = null,
         [Description("End date (yyyy-MM-dd). Defaults to Friday of current week.")] string? endDate = null,
         [Description("Comma-separated local git repo paths to scan (optional)")] string? localGitPaths = null,
@@ -151,20 +197,21 @@ public class AgendaTools
     {
         try
         {
+            var empId = GetEmployeeId(employeeId);
             var today = DateTime.Today;
             var monday = today.AddDays(-(int)today.DayOfWeek + (int)DayOfWeek.Monday);
             var friday = monday.AddDays(4);
-            
-            var start = string.IsNullOrEmpty(startDate) 
-                ? DateOnly.FromDateTime(monday) 
+
+            var start = string.IsNullOrEmpty(startDate)
+                ? DateOnly.FromDateTime(monday)
                 : DateOnly.Parse(startDate);
-            var end = string.IsNullOrEmpty(endDate) 
-                ? DateOnly.FromDateTime(friday) 
+            var end = string.IsNullOrEmpty(endDate)
+                ? DateOnly.FromDateTime(friday)
                 : DateOnly.Parse(endDate);
-            
+
             var options = new AgendaGenerationOptions
             {
-                EmployeeId = employeeId,
+                EmployeeId = empId,
                 StartDate = start,
                 EndDate = end,
                 LocalGitPaths = string.IsNullOrEmpty(localGitPaths) 
@@ -194,14 +241,15 @@ public class AgendaTools
     [McpServerTool]
     [Description("Analyze historical timesheet patterns to understand typical work schedules, common projects, and help with predictions.")]
     public async Task<string> AnalyzeWorkPatterns(
-        [Description("Employee ID (e.g., 'JEK')")] string employeeId,
+        [Description("Employee ID (e.g., 'JEK'). Optional if DefaultEmployeeId is configured.")] string? employeeId = null,
         [Description("Number of days to analyze (default: 14)")] int lookbackDays = 14,
         CancellationToken cancellationToken = default)
     {
         try
         {
+            var empId = GetEmployeeId(employeeId);
             var patterns = await _agendaService.AnalyzePatternsAsync(
-                employeeId,
+                empId,
                 _timeProService,
                 lookbackDays,
                 cancellationToken);
@@ -209,7 +257,7 @@ public class AgendaTools
             return JsonSerializer.Serialize(new
             {
                 success = true,
-                employeeId,
+                employeeId = empId,
                 analysisStartDate = patterns.AnalysisStartDate.ToString("yyyy-MM-dd"),
                 analysisEndDate = patterns.AnalysisEndDate.ToString("yyyy-MM-dd"),
                 patterns.TotalDays,
@@ -240,11 +288,11 @@ public class AgendaTools
     [McpServerTool]
     [Description("Create confirmation requests for timesheets based on an agenda. Only creates for days without existing timesheets.")]
     public async Task<string> CreateTimesheetsFromAgenda(
-        [Description("Employee ID (e.g., 'JEK')")] string employeeId,
         [Description("Start date (yyyy-MM-dd)")] string startDate,
         [Description("End date (yyyy-MM-dd)")] string endDate,
         [Description("Client ID")] string clientId,
         [Description("Project ID")] string projectId,
+        [Description("Employee ID (e.g., 'JEK'). Optional if DefaultEmployeeId is configured.")] string? employeeId = null,
         [Description("Category ID (default: 'DEV')")] string categoryId = "DEV",
         [Description("Location ID (default: 'Home')")] string locationId = "Home",
         [Description("Description for the timesheets")] string? description = null,
@@ -252,12 +300,13 @@ public class AgendaTools
     {
         try
         {
+            var empId = GetEmployeeId(employeeId);
             var start = DateOnly.Parse(startDate);
             var end = DateOnly.Parse(endDate);
-            
+
             // Get existing timesheets to avoid duplicates
             var existing = await _timeProService.GetTimesheetsAsync(
-                employeeId, start, end, cancellationToken);
+                empId, start, end, cancellationToken);
             
             var existingDates = existing
                 .Select(t => DateOnly.FromDateTime(t.Date))
@@ -280,7 +329,7 @@ public class AgendaTools
                 
                 requests.Add(new TimesheetRequest
                 {
-                    EmpId = employeeId,
+                    EmpId = empId,
                     ClientId = clientId,
                     ProjectId = projectId,
                     DateCreated = dateTime.ToString("yyyy-MM-ddT00:00:00"),
@@ -303,12 +352,12 @@ public class AgendaTools
             }
             
             // Create confirmation for bulk creation
-            var preview = string.Join("\n", requests.Select(r => 
+            var preview = string.Join("\n", requests.Select(r =>
                 $"- {r.DateCreated[..10]}: {r.ClientId}/{r.ProjectId} (09:00-17:00)"));
-            
+
             var confirmation = await _confirmationService.CreateConfirmationAsync(
                 ConfirmationOperationType.BulkCreateTimesheets,
-                $"Create {requests.Count} timesheets for {employeeId} ({start:MMM dd} to {end:MMM dd})",
+                $"Create {requests.Count} timesheets for {empId} ({start:MMM dd} to {end:MMM dd})",
                 $"Create {requests.Count} timesheets",
                 requests,
                 cancellationToken: cancellationToken);

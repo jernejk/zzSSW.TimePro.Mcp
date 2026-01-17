@@ -56,6 +56,10 @@ public class AgendaService : IAgendaService
             {
                 options.DefaultEndTime = end;
             }
+            if (empSettings.TimeLessMinutes > 0)
+            {
+                options.TimeLessMinutes = empSettings.TimeLessMinutes;
+            }
         }
         catch (Exception)
         {
@@ -67,7 +71,8 @@ public class AgendaService : IAgendaService
             WeekStartDate = options.StartDate,
             WeekEndDate = options.EndDate,
             EmployeeId = options.EmployeeId,
-            AgendaId = $"agenda-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..6]}"
+            AgendaId = $"agenda-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("N")[..6]}",
+            WorkHoursPerDay = options.WorkHoursPerDay  // e.g., 9h (09:00-18:00) - 1h lunch = 8h
         };
         
         // Initialize days
@@ -76,34 +81,42 @@ public class AgendaService : IAgendaService
             agenda.Days.Add(new DayAgenda { Date = date });
         }
         
-        // Fetch existing timesheets
+        // Fetch existing timesheets first (these are confirmed, highest priority)
         if (options.IncludeExistingTimesheets)
         {
             await AddExistingTimesheetsAsync(agenda, options, timeProService, cancellationToken);
         }
-        
-        // Fetch CRM bookings
-        if (options.IncludeCrmBookings)
-        {
-            await AddCrmBookingsAsync(agenda, options, timeProService, cancellationToken);
-        }
-        
-        // Fetch suggested timesheets
+
+        // Fetch recent projects (for fallback when no suggestions exist)
+        var recentProjects = await GetRecentProjectsAsync(options.EmployeeId, timeProService, cancellationToken);
+        agenda.RecentProjects = recentProjects;
+
+        // Fetch suggested timesheets (prioritized source for days without existing timesheets)
+        // This populates options including billable vs internal alternatives
         if (options.IncludeSuggestedTimesheets)
         {
             await AddSuggestedTimesheetsAsync(agenda, options, timeProService, cancellationToken);
         }
-        
-        // Add git activity
+
+        // Fetch CRM bookings (may supplement or provide alternatives - but local CRM may be broken)
+        if (options.IncludeCrmBookings)
+        {
+            await AddCrmBookingsAsync(agenda, options, timeProService, cancellationToken);
+        }
+
+        // For days without any suggestions, use recent projects as fallback
+        await AddRecentProjectFallbackAsync(agenda, options, recentProjects, cancellationToken);
+
+        // Add git activity (supplementary info for descriptions)
         if (gitScanningService != null && options.LocalGitPaths?.Count > 0)
         {
             await AddGitActivityAsync(agenda, options, gitScanningService, cancellationToken);
         }
-        
+
         // Update day statuses
         foreach (var day in agenda.Days)
         {
-            UpdateDayStatus(day);
+            UpdateDayStatus(day, options.WorkHoursPerDay);
         }
         
         return agenda;
@@ -143,7 +156,9 @@ public class AgendaService : IAgendaService
                         Description = ts.Notes,
                         Source = AgendaItemSource.ExistingTimesheet,
                         Confidence = AgendaConfidence.Confirmed,
-                        ExistingTimesheetId = ts.TimeId
+                        ExistingTimesheetId = ts.TimeId,
+                        BillableId = ts.BillableId,
+                        IsBillable = ts.IsBillable
                     });
                 }
             }
@@ -217,27 +232,27 @@ public class AgendaService : IAgendaService
         foreach (var day in agenda.Days)
         {
             if (day.IsWeekend) continue;
-            
+
+            // Skip if day already has existing timesheets covering full hours
+            if (day.Items.Any(i => i.ExistingTimesheetId.HasValue) && day.TotalHours >= 8)
+                continue;
+
             try
             {
                 var suggestions = await timeProService.GetSuggestedTimesheetsAsync(
                     options.EmployeeId,
                     day.Date,
                     cancellationToken);
-                
-                foreach (var suggestion in suggestions)
+
+                if (suggestions.Count == 0) continue;
+
+                // Convert suggestions to agenda items with billable info
+                var suggestedItems = suggestions.Select(suggestion =>
                 {
                     var start = TimeOnly.FromDateTime(suggestion.StartTime);
                     var end = TimeOnly.FromDateTime(suggestion.EndTime);
-                    
-                    // Skip if already covered by existing timesheet
-                    if (day.Items.Any(i => i.ExistingTimesheetId.HasValue && 
-                        OverlapsTime(i.StartTime, i.EndTime, start, end)))
-                    {
-                        continue;
-                    }
-                    
-                    day.Items.Add(new AgendaItem
+
+                    return new AgendaItem
                     {
                         Date = day.Date,
                         StartTime = start,
@@ -250,9 +265,37 @@ public class AgendaService : IAgendaService
                         Source = AgendaItemSource.SuggestedTimesheet,
                         Confidence = AgendaConfidence.High,
                         CategoryId = suggestion.Category ?? options.DefaultCategoryId,
-                        LocationId = options.DefaultLocationId
-                    });
+                        LocationId = options.DefaultLocationId,
+                        IsBillable = suggestion.IsBillable,
+                        SuggestedTimesheetId = suggestion.TimeId
+                    };
+                }).ToList();
+
+                // Skip items that overlap with existing timesheets
+                suggestedItems = suggestedItems
+                    .Where(item => !day.Items.Any(i => i.ExistingTimesheetId.HasValue &&
+                        OverlapsTime(i.StartTime, i.EndTime, item.StartTime, item.EndTime)))
+                    .ToList();
+
+                if (suggestedItems.Count == 0) continue;
+
+                // Prioritize: billable client work > internal work > leave
+                // Sort by: IsBillable (desc), then by hours (desc)
+                var sortedItems = suggestedItems
+                    .OrderByDescending(i => i.IsBillable)
+                    .ThenByDescending(i => i.Hours)
+                    .ToList();
+
+                // The first (highest priority) becomes the main item
+                var primaryItem = sortedItems[0];
+
+                // Others become alternatives on the primary item
+                if (sortedItems.Count > 1)
+                {
+                    primaryItem.Alternatives = sortedItems.Skip(1).ToList();
                 }
+
+                day.Items.Add(primaryItem);
             }
             catch
             {
@@ -352,34 +395,34 @@ public class AgendaService : IAgendaService
         };
     }
     
-    private void UpdateDayStatus(DayAgenda day)
+    private void UpdateDayStatus(DayAgenda day, decimal workHoursPerDay = 8)
     {
         if (day.IsWeekend)
         {
             day.Status = DayAgendaStatus.Weekend;
             return;
         }
-        
+
         if (day.Items.Count == 0)
         {
             day.Status = DayAgendaStatus.Empty;
             return;
         }
-        
+
         // Check for leave
-        if (day.Items.Any(i => i.CategoryId?.StartsWith("L-") == true || 
-                              i.CategoryId == "LSICK" || 
+        if (day.Items.Any(i => i.CategoryId?.StartsWith("L-") == true ||
+                              i.CategoryId == "LSICK" ||
                               i.CategoryId == "LNWD"))
         {
             day.Status = DayAgendaStatus.Leave;
             return;
         }
-        
-        if (day.TotalHours >= 8)
+
+        if (day.TotalHours >= workHoursPerDay)
         {
             day.Status = DayAgendaStatus.Complete;
         }
-        else if (day.UniqueProjects.Count > 1 || day.HasGaps)
+        else if (day.UniqueProjects.Count > 1 || day.TotalHours < workHoursPerDay)
         {
             day.Status = DayAgendaStatus.NeedsAttention;
         }
@@ -392,6 +435,191 @@ public class AgendaService : IAgendaService
     private static bool OverlapsTime(TimeOnly start1, TimeOnly end1, TimeOnly start2, TimeOnly end2)
     {
         return start1 < end2 && start2 < end1;
+    }
+
+    /// <summary>
+    /// Get recent projects from the API endpoint.
+    /// Falls back to calculating from timesheets if API fails.
+    /// </summary>
+    private async Task<List<RecentProject>> GetRecentProjectsAsync(
+        string employeeId,
+        ITimeProService timeProService,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            // Use the dedicated API endpoint for recent projects
+            var apiProjects = await timeProService.GetRecentProjectsAsync(employeeId, cancellationToken);
+
+            if (apiProjects.Count > 0)
+            {
+                // Convert API response to our RecentProject model
+                return apiProjects
+                    .Select(p => new RecentProject
+                    {
+                        ClientId = p.ClientId,
+                        ClientName = p.ClientName,
+                        ProjectId = p.ProjectId,
+                        ProjectName = p.ProjectName,
+                        CategoryId = p.CategoryId,
+                        BillableId = p.BillableId,
+                        IsBillable = p.IsBillable,
+                        UsageCount = p.TimesheetCount,
+                        LastUsedDate = DateOnly.FromDateTime(p.LastUsed),
+                        AverageHours = p.TimesheetCount > 0 ? p.TotalHours / p.TimesheetCount : 0
+                    })
+                    // Prioritize: billable client work > internal > by usage
+                    .OrderByDescending(p => p.IsBillable)
+                    .ThenByDescending(p => p.UsageCount)
+                    .ThenByDescending(p => p.LastUsedDate)
+                    .Take(10)
+                    .ToList();
+            }
+        }
+        catch
+        {
+            // Fall through to fallback calculation
+        }
+
+        // Fallback: calculate from recent timesheets if API fails
+        return await GetRecentProjectsFromTimesheetsAsync(employeeId, timeProService, cancellationToken);
+    }
+
+    /// <summary>
+    /// Fallback: calculate recent projects from timesheets.
+    /// </summary>
+    private async Task<List<RecentProject>> GetRecentProjectsFromTimesheetsAsync(
+        string employeeId,
+        ITimeProService timeProService,
+        CancellationToken cancellationToken)
+    {
+        var recentProjects = new List<RecentProject>();
+
+        try
+        {
+            var endDate = DateOnly.FromDateTime(DateTime.Today);
+            var startDate = endDate.AddDays(-30);
+
+            var timesheets = await timeProService.GetTimesheetsAsync(
+                employeeId, startDate, endDate, cancellationToken);
+
+            if (timesheets.Count == 0)
+                return recentProjects;
+
+            // Group by client+project and calculate stats
+            var grouped = timesheets
+                .Where(t => !string.IsNullOrEmpty(t.ClientId) && !string.IsNullOrEmpty(t.ProjectId))
+                .GroupBy(t => new { t.ClientId, t.ProjectId })
+                .Select(g =>
+                {
+                    var first = g.First();
+                    var lastUsed = g.Max(t => DateOnly.FromDateTime(t.Date));
+                    var totalHours = g.Sum(t => t.TotalTime);
+                    var dayCount = g.Select(t => t.Date.Date).Distinct().Count();
+
+                    return new RecentProject
+                    {
+                        ClientId = first.ClientId!,
+                        ClientName = first.Client,
+                        ProjectId = first.ProjectId!,
+                        ProjectName = first.Project,
+                        CategoryId = first.Category ?? "DEV",
+                        BillableId = first.BillableId,
+                        IsBillable = first.IsBillable,
+                        UsageCount = g.Count(),
+                        LastUsedDate = lastUsed,
+                        AverageHours = dayCount > 0 ? totalHours / dayCount : 0
+                    };
+                })
+                // Prioritize: billable client work > internal > by usage
+                .OrderByDescending(p => p.IsBillable)
+                .ThenByDescending(p => p.UsageCount)
+                .ThenByDescending(p => p.LastUsedDate)
+                .Take(10)
+                .ToList();
+
+            return grouped;
+        }
+        catch
+        {
+            return recentProjects;
+        }
+    }
+
+    /// <summary>
+    /// For days without any items, use recent projects as fallback.
+    /// </summary>
+    private Task AddRecentProjectFallbackAsync(
+        WeeklyAgenda agenda,
+        AgendaGenerationOptions options,
+        List<RecentProject> recentProjects,
+        CancellationToken cancellationToken)
+    {
+        if (recentProjects.Count == 0) return Task.CompletedTask;
+
+        foreach (var day in agenda.Days)
+        {
+            if (day.IsWeekend) continue;
+
+            // Skip if day already has items (from existing timesheets or suggestions)
+            if (day.Items.Count > 0) continue;
+
+            // Use the most frequently used billable project as primary
+            var primaryProject = recentProjects.FirstOrDefault(p => p.IsBillable)
+                                 ?? recentProjects.FirstOrDefault();
+
+            if (primaryProject == null) continue;
+
+            var primaryItem = new AgendaItem
+            {
+                Date = day.Date,
+                StartTime = options.DefaultStartTime,
+                EndTime = options.DefaultEndTime,
+                ClientId = primaryProject.ClientId,
+                ClientName = primaryProject.ClientName,
+                ProjectId = primaryProject.ProjectId,
+                ProjectName = primaryProject.ProjectName,
+                CategoryId = primaryProject.CategoryId,
+                LocationId = options.DefaultLocationId,
+                Description = $"Based on recent activity ({primaryProject.UsageCount} timesheets, last: {primaryProject.LastUsedDate:MMM dd})",
+                Source = AgendaItemSource.Pattern,
+                Confidence = AgendaConfidence.Medium,
+                BillableId = primaryProject.BillableId,
+                IsBillable = primaryProject.IsBillable
+            };
+
+            // Add other recent projects as alternatives
+            var alternatives = recentProjects
+                .Where(p => p != primaryProject)
+                .Take(3)
+                .Select(p => new AgendaItem
+                {
+                    Date = day.Date,
+                    StartTime = options.DefaultStartTime,
+                    EndTime = options.DefaultEndTime,
+                    ClientId = p.ClientId,
+                    ClientName = p.ClientName,
+                    ProjectId = p.ProjectId,
+                    ProjectName = p.ProjectName,
+                    CategoryId = p.CategoryId,
+                    LocationId = options.DefaultLocationId,
+                    Description = $"Alternative: {p.UsageCount} recent timesheets",
+                    Source = AgendaItemSource.Pattern,
+                    Confidence = AgendaConfidence.Low,
+                    BillableId = p.BillableId,
+                    IsBillable = p.IsBillable
+                })
+                .ToList();
+
+            if (alternatives.Count > 0)
+            {
+                primaryItem.Alternatives = alternatives;
+            }
+
+            day.Items.Add(primaryItem);
+        }
+
+        return Task.CompletedTask;
     }
     
     public string ExportToMarkdown(WeeklyAgenda agenda)
@@ -450,7 +678,7 @@ public class AgendaService : IAgendaService
             
             sb.AppendLine($"**Total: {day.TotalHours:F1} hours**");
             sb.AppendLine();
-            
+
             foreach (var item in day.Items.OrderBy(i => i.StartTime))
             {
                 var sourceLabel = item.Source switch
@@ -462,35 +690,66 @@ public class AgendaService : IAgendaService
                     AgendaItemSource.Pattern => "📊 Pattern",
                     _ => ""
                 };
-                
-                sb.AppendLine($"### {item.StartTime:HH:mm} - {item.EndTime:HH:mm} ({item.Hours:F1}h) {sourceLabel}");
+
+                var billableLabel = item.IsBillable ? "💰 Billable" : "🏠 Internal";
+
+                sb.AppendLine($"### {item.StartTime:HH:mm} - {item.EndTime:HH:mm} ({item.Hours:F1}h) {sourceLabel} {billableLabel}");
                 sb.AppendLine();
                 sb.AppendLine($"- **Client:** {item.ClientId} {(item.ClientName != null ? $"({item.ClientName})" : "")}");
-                
+
                 if (!string.IsNullOrEmpty(item.ProjectId))
                     sb.AppendLine($"- **Project:** {item.ProjectId} {(item.ProjectName != null ? $"({item.ProjectName})" : "")}");
-                
+
                 sb.AppendLine($"- **Category:** {item.CategoryId}");
                 sb.AppendLine($"- **Location:** {item.LocationId}");
-                
+
                 if (!string.IsNullOrEmpty(item.Description))
                     sb.AppendLine($"- **Description:** {item.Description}");
-                
+
                 if (!string.IsNullOrEmpty(item.Notes))
                 {
                     sb.AppendLine();
                     sb.AppendLine("**Notes:**");
                     sb.AppendLine(item.Notes);
                 }
-                
+
+                // Show alternatives if available
+                if (item.Alternatives?.Count > 0)
+                {
+                    sb.AppendLine();
+                    sb.AppendLine("**Alternatives:**");
+                    foreach (var alt in item.Alternatives)
+                    {
+                        var altBillable = alt.IsBillable ? "💰" : "🏠";
+                        sb.AppendLine($"- {altBillable} {alt.ClientId}/{alt.ProjectId} ({alt.ClientName ?? alt.ProjectName ?? "Unknown"})");
+                    }
+                }
+
                 sb.AppendLine();
             }
         }
         
+        // Show recent projects for reference
+        if (agenda.RecentProjects.Count > 0)
+        {
+            sb.AppendLine("---");
+            sb.AppendLine();
+            sb.AppendLine("## Recent Projects (Last 14 Days)");
+            sb.AppendLine();
+            sb.AppendLine("| Client | Project | Billable | Usage | Last Used |");
+            sb.AppendLine("|--------|---------|----------|-------|-----------|");
+            foreach (var proj in agenda.RecentProjects.Take(5))
+            {
+                var billable = proj.IsBillable ? "💰 Yes" : "🏠 No";
+                sb.AppendLine($"| {proj.ClientId} | {proj.ProjectId} | {billable} | {proj.UsageCount}x | {proj.LastUsedDate:MMM dd} |");
+            }
+            sb.AppendLine();
+        }
+
         sb.AppendLine("---");
         sb.AppendLine();
         sb.AppendLine("*To create timesheets from this agenda, use the `ConfirmOperation` tool with the agenda ID.*");
-        
+
         return sb.ToString();
     }
     
