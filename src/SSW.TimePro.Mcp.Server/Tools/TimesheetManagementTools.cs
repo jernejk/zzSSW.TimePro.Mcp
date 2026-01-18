@@ -35,25 +35,6 @@ public class TimesheetManagementTools
     }
 
     /// <summary>
-    /// Check if write operations should be blocked.
-    /// </summary>
-    private string? CheckWritePermission()
-    {
-        if (_settings.IsProduction)
-        {
-            return JsonSerializer.Serialize(new
-            {
-                success = false,
-                error = "BLOCKED: Write operations are not allowed on production environment. Use local or staging for testing.",
-                environment = "production",
-                baseUrl = _settings.BaseUrl,
-                hint = "Dry-run operations are allowed - they create confirmations that cannot be executed on production."
-            }, _jsonOptions);
-        }
-        return null;
-    }
-
-    /// <summary>
     /// Search for clients.
     /// </summary>
     [McpServerTool]
@@ -186,8 +167,8 @@ public class TimesheetManagementTools
         [Description("Date (yyyy-MM-dd)")] string date,
         [Description("Start time (HH:mm)")] string startTime,
         [Description("End time (HH:mm)")] string endTime,
-        [Description("Category ID")] string categoryId,
-        [Description("Location ID")] string locationId,
+        [Description("Category ID (e.g., 'DEV' for development, 'MEETING' for meetings, 'ADMIN' for admin work). Common values: 'DEV', 'MEETING', 'ADMIN', 'SUPPORT'. Default to 'DEV' for development work.")] string categoryId,
+        [Description("Location ID (e.g., 'Home', 'Office', 'Client-Site'). Common values: 'Home' for remote work, 'Office' for office work, 'Client-Site' for on-site client work. Default to 'Home' if not specified.")] string locationId,
         [Description("Notes/description (optional)")] string? notes = null,
         [Description("Time less in hours (optional, default: 0)")] decimal timeLess = 0,
         [Description("Billable ID (optional, default: 'BILLABLE'). Use 'W' for internal work.")] string billableId = "BILLABLE",
@@ -239,15 +220,9 @@ public class TimesheetManagementTools
                     message = $"Confirmation created. Use ConfirmOperation with ID '{confirmation.Id}' to execute.",
                     preview,
                     expiresAt = confirmation.ExpiresAt,
-                    request,
-                    isProduction = _settings.IsProduction,
-                    productionWarning = _settings.IsProduction ? "This confirmation CANNOT be executed on production." : null
+                    request
                 }, _jsonOptions);
             }
-
-            // Block direct writes to production
-            var blocked = CheckWritePermission();
-            if (blocked != null) return blocked;
 
             var response = await _timeProService.CreateTimesheetAsync(request, dryRun: false, cancellationToken);
             
@@ -283,8 +258,8 @@ public class TimesheetManagementTools
         [Description("Date (yyyy-MM-dd)")] string date,
         [Description("Start time (HH:mm)")] string startTime,
         [Description("End time (HH:mm)")] string endTime,
-        [Description("Category ID")] string categoryId,
-        [Description("Location ID")] string locationId,
+        [Description("Category ID (e.g., 'DEV' for development, 'MEETING' for meetings, 'ADMIN' for admin work). Common values: 'DEV', 'MEETING', 'ADMIN', 'SUPPORT'. Default to 'DEV' for development work.")] string categoryId,
+        [Description("Location ID (e.g., 'Home', 'Office', 'Client-Site'). Common values: 'Home' for remote work, 'Office' for office work, 'Client-Site' for on-site client work. Default to 'Home' if not specified.")] string locationId,
         [Description("Notes/description (optional)")] string? notes = null,
         [Description("Time less in hours (optional, default: 0)")] decimal timeLess = 0,
         [Description("Billable ID (optional, default: 'BILLABLE')")] string billableId = "BILLABLE",
@@ -317,13 +292,6 @@ public class TimesheetManagementTools
                 IterationId = iterationId
             };
 
-
-            // Block direct writes to production (unless dry run)
-            if (!dryRun)
-            {
-                var blocked = CheckWritePermission();
-                if (blocked != null) return blocked;
-            }
 
             var response = await _timeProService.UpdateTimesheetAsync(request, dryRun, cancellationToken);
             
@@ -377,15 +345,9 @@ public class TimesheetManagementTools
                     message = $"Confirmation created. Use ConfirmOperation with ID '{confirmation.Id}' to execute.",
                     preview,
                     expiresAt = confirmation.ExpiresAt,
-                    timesheetId,
-                    isProduction = _settings.IsProduction,
-                    productionWarning = _settings.IsProduction ? "This confirmation CANNOT be executed on production." : null
+                    timesheetId
                 }, _jsonOptions);
             }
-
-            // Block direct writes to production
-            var blocked = CheckWritePermission();
-            if (blocked != null) return blocked;
 
             var response = await _timeProService.DeleteTimesheetAsync(
                 timesheetId, dryRun: false, cancellationToken);

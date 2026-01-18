@@ -38,7 +38,7 @@ public class ConfirmationTools
     /// Execute a pending confirmation.
     /// </summary>
     [McpServerTool]
-    [Description("Execute a pending confirmation. This will perform the actual operation (create/update/delete timesheet). If a confirmation passphrase is configured, you must provide it. Production environment is READ-ONLY.")]
+    [Description("Execute a pending confirmation. This will perform the actual operation (create/update/delete timesheet). If a confirmation passphrase is configured, you must provide it.")]
     public async Task<string> ConfirmOperation(
         [Description("The confirmation ID to execute")] string confirmationId,
         [Description("Confirmation passphrase (required if TIMEPRO_CONFIRM_PHRASE is set). e.g., 'let's do it!'")] string? passphrase = null,
@@ -46,18 +46,6 @@ public class ConfirmationTools
     {
         try
         {
-            // Block production writes
-            if (_settings.IsProduction)
-            {
-                return JsonSerializer.Serialize(new
-                {
-                    success = false,
-                    error = "BLOCKED: Write operations are not allowed on production environment. Use local or staging for testing.",
-                    environment = "production",
-                    baseUrl = _settings.BaseUrl
-                }, _jsonOptions);
-            }
-
             // Validate passphrase if configured
             if (!string.IsNullOrEmpty(_settings.ConfirmPhrase))
             {

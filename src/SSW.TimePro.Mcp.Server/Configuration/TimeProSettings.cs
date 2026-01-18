@@ -21,7 +21,7 @@ public class TimeProSettings
     /// - https://api.staging-sswtimepro.com/ (staging - full access)
     /// - https://api.sswtimepro.com/ (production - READ ONLY)
     /// </summary>
-    public string BaseUrl { get; set; } = "https://api.local-sswtimepro.com:7107/";
+    public string BaseUrl { get; set; } = "https://api.sswtimepro.com/";
 
     /// <summary>
     /// Primary tenant ID (e.g., 'ssw', 'jk_mcp')

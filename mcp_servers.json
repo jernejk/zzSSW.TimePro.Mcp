@@ -8,7 +8,20 @@
                 "/Users/jk/Developer/git/SSW.TimePro.Mcp/src/SSW.TimePro.Mcp.Server/SSW.TimePro.Mcp.Server.csproj"
             ],
             "env": {
-                "DOTNET_ENVIRONMENT": "Development"
+                "DOTNET_ENVIRONMENT": "Development",
+                "TIMEPRO_TENANT_ID": "ssw",
+                "TIMEPRO_BASE_URL": "https://api.local-sswtimepro.com:7107/",
+                "TIMEPRO_DEFAULT_EMPLOYEE_ID": "JEK",
+                "GITHUB_USERNAME": "jernejk"
+            }
+        },
+        "ssw-timepro-cli": {
+            "command": "ssw-timepro-mcp",
+            "env": {
+                "TIMEPRO_TENANT_ID": "ssw",
+                "TIMEPRO_BASE_URL": "https://api.local-sswtimepro.com:7107/",
+                "TIMEPRO_DEFAULT_EMPLOYEE_ID": "JEK",
+                "GITHUB_USERNAME": "jernejk"
             }
         }
     }
