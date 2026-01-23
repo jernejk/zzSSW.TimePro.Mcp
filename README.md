@@ -1,10 +1,10 @@
-# SSW.TimePro.Mcp
+# Unofficial SSW.TimePro.Mcp
 
 [![.NET 10](https://img.shields.io/badge/.NET-10-512BD4)](https://dotnet.microsoft.com/download/dotnet/10.0)
 [![MCP](https://img.shields.io/badge/MCP-Model%20Context%20Protocol-blue)](https://modelcontextprotocol.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A .NET 10 Model Context Protocol (MCP) server for SSW TimePro. This server enables AI assistants (GitHub Copilot, Claude, Cursor, etc.) to manage timesheets through natural language.
+A unofficial .NET 10 Model Context Protocol (MCP) server for SSW TimePro. This server enables AI assistants (GitHub Copilot, Claude, Cursor, etc.) to manage timesheets through natural language.
 
 ## Features
 
