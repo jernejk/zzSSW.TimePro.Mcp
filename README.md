@@ -1,5 +1,14 @@
 # Unofficial SSW.TimePro.Mcp
 
+> [!IMPORTANT]
+> This repository is no longer maintained.
+>
+> Active development has moved to [SSWConsulting/timepro.tools](https://github.com/SSWConsulting/timepro.tools). Use that repository for current CLI and MCP support.
+>
+> This repository has been renamed with a `zz` prefix to make its deprecated status visible in repository lists.
+>
+> Read-only schedule: this repository is planned to be archived and made read-only on 2026-09-30. Until then it remains available for migration and historical reference only; no new work is planned here.
+
 [![.NET 10](https://img.shields.io/badge/.NET-10-512BD4)](https://dotnet.microsoft.com/download/dotnet/10.0)
 [![MCP](https://img.shields.io/badge/MCP-Model%20Context%20Protocol-blue)](https://modelcontextprotocol.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
